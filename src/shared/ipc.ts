@@ -2,7 +2,7 @@
 // Every request is validated with these schemas in main before it is used.
 
 import { z } from 'zod'
-import type { AppInfo, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
+import type { AppInfo, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
 import { AUDIO_MODES } from './types'
 import { CAPTION_STYLE_IDS } from './captionStyles'
 import { EVENT_CHANNELS, type INVOKE_CHANNELS } from './channels'
@@ -47,6 +47,8 @@ export type ClipPatch = z.infer<typeof ClipPatchSchema>
 
 export type CreateJobResult = { ok: true; jobId: string; existing: boolean } | { ok: false; reason: string }
 
+export type SetChannelWatchResult = { ok: true; channel: string } | { ok: false; reason: string }
+
 /** Request channels: name -> [input schema]. */
 export const Invoke = {
   'app:info': z.tuple([]),
@@ -77,7 +79,10 @@ export const Invoke = {
   'exports:cancel': z.tuple([id]),
   'exports:show': z.tuple([id]),
   'taste:status': z.tuple([]),
-  'taste:reset': z.tuple([])
+  'taste:reset': z.tuple([]),
+  'channelWatch:status': z.tuple([]),
+  'channelWatch:set': z.tuple([z.string().max(200)]),
+  'channelWatch:clear': z.tuple([])
 } as const
 
 export type InvokeChannel = keyof typeof Invoke
@@ -117,7 +122,10 @@ export interface InvokeResult {
   'exports:cancel': void
   'exports:show': void
   'taste:status': { tuned: boolean }
-  'taste:reset': void
+  'taste:reset': void,
+  'channelWatch:status': ChannelWatchStatus
+  'channelWatch:set': SetChannelWatchResult
+  'channelWatch:clear': void
 }
 
 /** Events pushed from main to the UI. */
@@ -126,6 +134,9 @@ export interface Events {
   'jobs:changed': JobSummary
   'exports:changed': ExportItem
   'app:update': UpdateState
+  'channelWatch:changed': ChannelWatchStatus
+  /** A notification for a ready job was clicked; bring it into view. */
+  'jobs:focus': { jobId: string }
 }
 
 export type EventChannel = keyof Events

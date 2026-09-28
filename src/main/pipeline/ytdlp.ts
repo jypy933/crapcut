@@ -30,6 +30,16 @@ export function ytdlpError(err: unknown): UserError {
   return new UserError('Downloading from Twitch failed. Try again in a few minutes.', { cause: err })
 }
 
+/** Same idea as `ytdlpError`, worded for checking a channel rather than a VOD. */
+export function channelYtdlpError(channel: string, err: unknown): UserError {
+  const text = err instanceof ToolFailedError ? err.stderrTail : err instanceof Error ? err.message : String(err)
+  const t = text.toLowerCase()
+  if (t.includes('does not exist') || t.includes('http error 404')) return new UserError(`No channel named "${channel}" was found.`, { cause: err, retryable: false })
+  if (t.includes('getaddrinfo') || t.includes('unable to download') || t.includes('timed out') || t.includes('connection'))
+    return new UserError('Could not reach Twitch. Check your internet connection.', { cause: err })
+  return new UserError(`Could not check ${channel} for new VODs.`, { cause: err })
+}
+
 interface RawInfo {
   id?: string
   title?: string
@@ -74,6 +84,54 @@ export async function fetchVodMeta(ytdlp: string, url: string, vodId: string, si
     if (err instanceof UserError) throw err
     if (err instanceof Error && err.name === 'CancelledError') throw err
     throw ytdlpError(err)
+  }
+}
+
+/** The channel's archived-VOD listing, newest first. */
+export function channelVideosUrl(channel: string): string {
+  return `https://www.twitch.tv/${channel}/videos?filter=archives&sort=time`
+}
+
+/**
+ * Raw JSON of a channel's recent VODs, for `core/channelVideos.ts` to parse.
+ * Flat-playlist mode skips each video's own page, so this is fast enough to
+ * poll on a schedule.
+ */
+export async function fetchChannelVideos(ytdlp: string, channel: string, signal: AbortSignal, limit = 20): Promise<string> {
+  try {
+    const { stdout } = await runTool(
+      ytdlp,
+      ['--ignore-config', '--encoding', 'utf-8', '--no-colors', '--retries', '5', '--socket-timeout', '30', '--flat-playlist', '--no-warnings', '--playlist-end', String(limit), '-J', channelVideosUrl(channel)],
+      { signal, env: ENV, timeoutMs: 60_000, keepBytes: 4 * 1024 * 1024 }
+    )
+    return stdout
+  } catch (err) {
+    if (err instanceof Error && err.name === 'CancelledError') throw err
+    throw channelYtdlpError(channel, err)
+  }
+}
+
+/**
+ * Whether the channel is live right now. A channel's own page is the
+ * "twitch:stream" extractor: it succeeds with `is_live: true` while live,
+ * and fails with "The channel is not currently live" otherwise. Used to
+ * hold back an in-progress stream's own (still growing) VOD from the watch.
+ */
+export async function fetchChannelIsLive(ytdlp: string, channel: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const { stdout } = await runTool(ytdlp, ['--ignore-config', '--encoding', 'utf-8', '--no-colors', '--retries', '5', '--socket-timeout', '30', '--no-warnings', '-J', `https://www.twitch.tv/${channel}`], {
+      signal,
+      env: ENV,
+      timeoutMs: 60_000,
+      keepBytes: 512 * 1024
+    })
+    const raw = JSON.parse(stdout) as { is_live?: boolean; live_status?: string }
+    return raw.is_live === true || raw.live_status === 'is_live'
+  } catch (err) {
+    if (err instanceof Error && err.name === 'CancelledError') throw err
+    const text = err instanceof ToolFailedError ? err.stderrTail : err instanceof Error ? err.message : String(err)
+    if (/not currently live/i.test(text)) return false
+    throw channelYtdlpError(channel, err)
   }
 }
 

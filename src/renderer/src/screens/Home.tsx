@@ -1,7 +1,7 @@
-import { AlertCircle, ArrowRight, Pause, Play, RotateCcw, Trash2 } from 'lucide-react'
+import { AlertCircle, ArrowRight, Pause, Play, Radio, RotateCcw, Trash2, X } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { formatClock, formatEta } from '@shared/format'
-import { STEP_IDS, STEP_LABELS, type JobSummary } from '@shared/types'
+import { STEP_IDS, STEP_LABELS, type ChannelWatchStatus, type JobSummary } from '@shared/types'
 import { parseVodUrl } from '@shared/vodUrl'
 import type { Route } from '../App'
 import { call, errorText, useEvent } from '../api'
@@ -77,6 +77,8 @@ export function Home({ go }: { go: (r: Route) => void }): ReactNode {
         </div>
       )}
 
+      <ChannelWatch />
+
       {jobs && jobs.length === 0 && (
         <div className="empty">
           {[
@@ -101,6 +103,87 @@ export function Home({ go }: { go: (r: Route) => void }): ReactNode {
         </div>
       )}
     </div>
+  )
+}
+
+/** Small, out-of-the-way control to set or clear the one watched channel. */
+function ChannelWatch(): ReactNode {
+  const [status, setStatus] = useState<ChannelWatchStatus | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [input, setInput] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void call('channelWatch:status').then(setStatus)
+  }, [])
+  useEvent('channelWatch:changed', setStatus)
+
+  async function save(e: FormEvent): Promise<void> {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      const r = await call('channelWatch:set', input)
+      if (!r.ok) setError(r.reason)
+      else {
+        setInput('')
+        setEditing(false)
+      }
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!status) return null
+
+  if (status.channel) {
+    return (
+      <div className="row" style={{ marginTop: 14 }}>
+        <Radio size={13} className="faint" style={{ flex: 'none' }} />
+        <span className="small muted">
+          Watching <strong>{status.channel}</strong> for new VODs
+          {status.checking ? ' · checking now...' : status.lastError ? ` · ${status.lastError}` : ''}
+        </span>
+        <button type="button" className="btn sm ghost icon" title="Stop watching" onClick={() => void call('channelWatch:clear')}>
+          <X size={13} />
+        </button>
+      </div>
+    )
+  }
+
+  if (!editing) {
+    return (
+      <button type="button" className="btn sm ghost" style={{ marginTop: 14 }} onClick={() => setEditing(true)}>
+        <Radio size={13} /> Watch a channel for new VODs
+      </button>
+    )
+  }
+
+  return (
+    <form className="row" style={{ marginTop: 14 }} onSubmit={(e) => void save(e)}>
+      <input
+        className="input"
+        style={{ width: 220 }}
+        placeholder="channel name"
+        value={input}
+        onChange={(e) => {
+          setInput(e.target.value)
+          setError(null)
+        }}
+        spellCheck={false}
+        autoFocus
+      />
+      <button type="submit" className="btn sm primary" disabled={busy || !input.trim()}>
+        {busy ? <Spinner /> : null} Watch
+      </button>
+      <button type="button" className="btn sm ghost" onClick={() => setEditing(false)}>
+        Cancel
+      </button>
+      {error && <span className="small error">{error}</span>}
+    </form>
   )
 }
 

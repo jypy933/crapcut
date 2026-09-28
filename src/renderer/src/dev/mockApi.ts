@@ -1,8 +1,9 @@
 // Development only: a fake backend so the UI can be viewed in a plain browser
 // (npm run dev:ui). Never included in the packaged app.
 
+import { parseChannelName } from '@shared/channelName'
 import type { CrapcutApi, EventChannel, Events, InvokeChannel } from '@shared/ipc'
-import type { AppInfo, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
+import type { AppInfo, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
 
 const listeners = new Map<string, Set<(p: unknown) => void>>()
 function emit<E extends EventChannel>(e: E, p: Events[E]): void {
@@ -112,6 +113,7 @@ let clips: Clip[] = titles.map((title, i) => {
 })
 let layouts: Layout[] = []
 let exports: ExportItem[] = []
+let channelWatch: ChannelWatchStatus = { channel: null, enabledAt: null, checking: false, lastCheckedAt: null, lastError: null }
 
 const info: AppInfo = {
   version: '0.1.0',
@@ -153,7 +155,19 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
     return exports.map((e) => e.id)
   },
   'taste:status': () => ({ tuned: true }),
-  'taste:reset': () => undefined
+  'taste:reset': () => undefined,
+  'channelWatch:status': () => channelWatch,
+  'channelWatch:set': (text: string) => {
+    const parsed = parseChannelName(text)
+    if (!parsed.ok) return { ok: false, reason: parsed.reason }
+    channelWatch = { channel: parsed.channel, enabledAt: Date.now(), checking: false, lastCheckedAt: null, lastError: null }
+    emit('channelWatch:changed', channelWatch)
+    return { ok: true, channel: parsed.channel }
+  },
+  'channelWatch:clear': () => {
+    channelWatch = { channel: null, enabledAt: null, checking: false, lastCheckedAt: null, lastError: null }
+    emit('channelWatch:changed', channelWatch)
+  }
 }
 
 export function installMockApi(sampleVideo: string): void {
