@@ -1,0 +1,81 @@
+import { describe, expect, it } from 'vitest'
+import { captionAt, clipWords, groupWords } from '@shared/captions'
+import type { Word } from '@shared/types'
+import { assColor, assEscape, assTime, buildAss, defaultAssStyle, inlineColor } from './ass'
+
+const w = (t0: number, t1: number, text: string): Word => ({ t0, t1, text })
+
+describe('groupWords', () => {
+  it('groups a few words at a time and breaks on punctuation and pauses', () => {
+    const words = [w(0, 0.3, 'so'), w(0.3, 0.6, 'this'), w(0.6, 0.9, 'is'), w(0.9, 1.2, 'crazy.'), w(1.3, 1.5, 'wait'), w(3, 3.3, 'what')]
+    const groups = groupWords(words)
+    expect(groups.map((g) => g.words.map((x) => x.text).join(' '))).toEqual(['so this is', 'crazy.', 'wait', 'what'])
+  })
+  it('respects the character limit', () => {
+    const words = [w(0, 0.3, 'extraordinarily'), w(0.3, 0.6, 'long'), w(0.6, 0.9, 'words')]
+    expect(groupWords(words).map((g) => g.words.length)).toEqual([1, 2])
+  })
+  it('never overlaps groups and lingers briefly', () => {
+    const groups = groupWords([w(0, 0.3, 'a'), w(0.3, 0.6, 'b'), w(0.6, 0.9, 'c'), w(0.95, 1.2, 'd'), w(5, 5.2, 'e')])
+    for (let i = 1; i < groups.length; i++) expect(groups[i]!.start).toBeGreaterThanOrEqual(groups[i - 1]!.end)
+    expect(groups[1]!.end).toBeCloseTo(1.6)
+  })
+  it('skips empty words', () => {
+    expect(groupWords([w(0, 1, '  ')])).toEqual([])
+  })
+})
+
+describe('captionAt', () => {
+  const groups = groupWords([w(0, 0.3, 'one'), w(0.3, 0.6, 'two'), w(0.6, 0.9, 'three'), w(2, 2.3, 'four')])
+  it('finds the active word', () => {
+    expect(captionAt(groups, 0.35)).toMatchObject({ active: 1 })
+    expect(captionAt(groups, 2.1)?.group.words[0]!.text).toBe('four')
+    expect(captionAt(groups, 1.6)).toBeNull()
+    expect(captionAt(groups, -1)).toBeNull()
+  })
+})
+
+describe('clipWords', () => {
+  it('shifts to clip time and trims', () => {
+    expect(clipWords([w(9, 10.5, 'a'), w(11, 12, 'b'), w(30, 31, 'c')], 10, 20)).toEqual([w(0, 0.5, 'a'), w(1, 2, 'b')])
+  })
+})
+
+describe('ASS helpers', () => {
+  it('formats times and colours', () => {
+    expect(assTime(0)).toBe('0:00:00.00')
+    expect(assTime(3723.456)).toBe('1:02:03.46')
+    expect(assColor('#FFD400')).toBe('&H0000D4FF')
+    expect(assColor('#000000', 0x80)).toBe('&H80000000')
+    expect(inlineColor('#FFD400')).toBe('&H00D4FF&')
+    expect(() => assColor('red')).toThrow()
+  })
+  it('neutralises override tags and line breaks', () => {
+    expect(assEscape('a{\\b1}b\nc\\N')).toBe('a(/b1)b c/N')
+  })
+})
+
+describe('buildAss', () => {
+  const words = [w(0.5, 0.8, 'hello'), w(0.8, 1.1, 'there'), w(1.1, 1.5, 'bro!'), w(3, 3.4, '{evil}')]
+  const ass = buildAss(words, defaultAssStyle('vertical', 0.7, true))
+  const dialogues = ass.split('\n').filter((l) => l.startsWith('Dialogue:'))
+
+  it('has a header sized for the format', () => {
+    expect(ass).toContain('PlayResX: 1080')
+    expect(ass).toContain('PlayResY: 1920')
+    expect(ass).toContain('Style: Caption,Montserrat Black,88,')
+  })
+  it('emits one event per word with the word highlighted', () => {
+    expect(dialogues).toHaveLength(4)
+    expect(dialogues[0]).toContain('0:00:00.50,0:00:00.80')
+    expect(dialogues[1]).toContain('HELLO {\\c&H00D4FF&}THERE{\\c&HFFFFFF&} BRO!')
+    expect(dialogues[0]).toContain('\\pos(540,1344)')
+  })
+  it('escapes user text', () => {
+    expect(dialogues[3]).toContain('(EVIL)')
+    expect(dialogues[3]).not.toContain('{EVIL}')
+  })
+  it('handles no words', () => {
+    expect(buildAss([], defaultAssStyle('horizontal', 0.8, false))).toContain('[Events]')
+  })
+})

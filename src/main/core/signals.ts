@@ -1,0 +1,168 @@
+// Time-series signals used to find moments: chat activity and audio loudness,
+// sampled once per second, turned into robust "how unusual is this" scores.
+
+import type { ChatMessage } from './chat'
+
+/** One value per second, index = second from the start of the VOD. */
+export type Series = Float64Array
+
+const LAUGH =
+  /\b(kekw|kekl|lul|lulw|omegalul|lmao+|lmfao|lol+|icant|pepelaugh|xd+|mdr+|ptdr+|jaja+|haha+|hehe+|dead|💀)\b|😂|🤣|💀/i
+const HYPE =
+  /\b(pog\w*|poggers|pogchamp|w{1,}|clip( ?it| ?that)?|!clip|holy|no ?way|omg|lets ?go+|let'?s go+|gg+|ez|insane|clutch|hype)\b/i
+const SHOCK = /^\?+$|\bwtf\b|\bmonka\w*|\bd:|\bno+o+\b|\bwhat\b|😱|😳/i
+
+/** How strong a reaction one chat message is (1..3). */
+export function reactionWeight(text: string): number {
+  let w = 1
+  if (LAUGH.test(text)) w += 1
+  if (HYPE.test(text)) w += 1
+  if (SHOCK.test(text)) w += 0.5
+  const letters = text.replace(/[^a-zA-Z]/g, '')
+  if (letters.length >= 4 && letters === letters.toUpperCase()) w += 0.3
+  return Math.min(w, 3)
+}
+
+/** Seconds a single chatter must wait before their next message counts again. */
+const PER_USER_COOLDOWN = 3
+
+/**
+ * Chat reaction per second. Each chatter counts at most once every few seconds so
+ * one spammer cannot fake a spike.
+ */
+export function chatSeries(messages: ChatMessage[], durationSec: number): Series {
+  const n = Math.max(1, Math.ceil(durationSec))
+  const out = new Float64Array(n)
+  const last = new Map<string, number>()
+  for (const m of messages) {
+    if (m.t < 0 || m.t >= n) continue
+    const key = m.user.toLowerCase()
+    const prev = last.get(key)
+    if (prev !== undefined && m.t - prev < PER_USER_COOLDOWN) continue
+    last.set(key, m.t)
+    out[Math.floor(m.t)]! += reactionWeight(m.text)
+  }
+  return out
+}
+
+/** Centred moving average over `window` seconds. */
+export function movingAverage(values: Series, window: number): Series {
+  const n = values.length
+  const out = new Float64Array(n)
+  const half = Math.max(0, Math.floor(window / 2))
+  let sum = 0
+  let lo = 0
+  let hi = -1
+  for (let i = 0; i < n; i++) {
+    const a = Math.max(0, i - half)
+    const b = Math.min(n - 1, i + half)
+    while (hi < b) sum += values[++hi]!
+    while (lo < a) sum -= values[lo++]!
+    out[i] = sum / (b - a + 1)
+  }
+  return out
+}
+
+function median(sorted: number[]): number {
+  if (sorted.length === 0) return 0
+  const mid = sorted.length >> 1
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2
+}
+
+/**
+ * Rolling median and median absolute deviation over a long window, computed on
+ * coarse buckets (fast enough for 12 h streams) and interpolated back per second.
+ */
+export function rollingBaseline(
+  values: Series,
+  windowSec = 600,
+  bucketSec = 10
+): { median: Series; mad: Series } {
+  const n = values.length
+  const buckets = Math.max(1, Math.ceil(n / bucketSec))
+  const bucketMean = new Float64Array(buckets)
+  for (let b = 0; b < buckets; b++) {
+    let s = 0
+    let c = 0
+    for (let i = b * bucketSec; i < Math.min(n, (b + 1) * bucketSec); i++) {
+      s += values[i]!
+      c++
+    }
+    bucketMean[b] = c ? s / c : 0
+  }
+  const halfB = Math.max(1, Math.round(windowSec / bucketSec / 2))
+  const bMed = new Float64Array(buckets)
+  const bMad = new Float64Array(buckets)
+  for (let b = 0; b < buckets; b++) {
+    const win: number[] = []
+    for (let j = Math.max(0, b - halfB); j <= Math.min(buckets - 1, b + halfB); j++) win.push(bucketMean[j]!)
+    win.sort((x, y) => x - y)
+    const med = median(win)
+    const dev = win.map((v) => Math.abs(v - med)).sort((x, y) => x - y)
+    bMed[b] = med
+    bMad[b] = median(dev)
+  }
+  const med = new Float64Array(n)
+  const mad = new Float64Array(n)
+  for (let i = 0; i < n; i++) {
+    const pos = i / bucketSec - 0.5
+    const b0 = Math.max(0, Math.min(buckets - 1, Math.floor(pos)))
+    const b1 = Math.min(buckets - 1, b0 + 1)
+    const f = Math.max(0, Math.min(1, pos - b0))
+    med[i] = bMed[b0]! * (1 - f) + bMed[b1]! * f
+    mad[i] = bMad[b0]! * (1 - f) + bMad[b1]! * f
+  }
+  return { median: med, mad }
+}
+
+/**
+ * Robust z-score: how many "typical deviations" above the local normal each
+ * second is. `floor` keeps quiet streams from turning noise into spikes.
+ */
+export function robustZ(values: Series, windowSec = 600, floor = 0.5): Series {
+  const { median: med, mad } = rollingBaseline(values, windowSec)
+  const out = new Float64Array(values.length)
+  for (let i = 0; i < values.length; i++) {
+    const scale = Math.max(1.4826 * mad[i]!, 0.25 * med[i]!, floor)
+    out[i] = (values[i]! - med[i]!) / scale
+  }
+  return out
+}
+
+export interface Peak {
+  /** Second of the maximum. */
+  t: number
+  /** z-score at the maximum. */
+  z: number
+  /** Second where the rise started. */
+  onset: number
+}
+
+/**
+ * Local maxima above `minZ`, strongest first, at least `separation` seconds
+ * apart. The onset is where the score first climbed above `onsetZ`.
+ */
+export function findPeaks(z: Series, minZ: number, separation: number, onsetZ = 1, maxRise = 60): Peak[] {
+  const candidates: number[] = []
+  for (let i = 0; i < z.length; i++) {
+    const v = z[i]!
+    if (v < minZ) continue
+    if ((i === 0 || v >= z[i - 1]!) && (i === z.length - 1 || v > z[i + 1]!)) candidates.push(i)
+  }
+  candidates.sort((a, b) => z[b]! - z[a]!)
+  const picked: Peak[] = []
+  for (const t of candidates) {
+    if (picked.some((p) => Math.abs(p.t - t) < separation)) continue
+    let onset = t
+    while (onset > 0 && t - onset < maxRise && z[onset - 1]! > onsetZ) onset--
+    picked.push({ t, z: z[t]!, onset })
+  }
+  return picked
+}
+
+/** Largest value of `s` in [from, to] (clamped). */
+export function maxIn(s: Series, from: number, to: number): number {
+  let m = -Infinity
+  for (let i = Math.max(0, Math.floor(from)); i <= Math.min(s.length - 1, Math.ceil(to)); i++) m = Math.max(m, s[i]!)
+  return m === -Infinity ? 0 : m
+}
