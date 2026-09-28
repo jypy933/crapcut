@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { Word } from '@shared/types'
 import type { ChatMessage } from './chat'
 import {
+  CHAT_DELAY_SEC,
   CLIP_MAX_SEC,
   CLIP_MIN_SEC,
+  defaultWindow,
   edgeSkip,
   fallbackTitle,
   findCandidates,
@@ -12,6 +14,7 @@ import {
   strengthToScore,
   targetClipCount
 } from './moments'
+import { DEFAULT_TASTE_ADJUSTMENTS, deriveTasteAdjustments } from './taste'
 
 function rng(seed: number): () => number {
   let s = seed >>> 0
@@ -90,6 +93,17 @@ describe('snapWindow', () => {
   })
 })
 
+describe('defaultWindow', () => {
+  it('uses the default 18 s lead-in and 10 s lead-out with no adjustments', () => {
+    expect(defaultWindow(100, 100)).toEqual({ start: 82, end: Math.max(110, 100 - CHAT_DELAY_SEC + 10) })
+  })
+  it('follows learned lead-in and lead-out padding', () => {
+    const w = defaultWindow(100, 100, { ...DEFAULT_TASTE_ADJUSTMENTS, leadInSec: 10, leadOutSec: 5 })
+    expect(w.start).toBe(90)
+    expect(w.end).toBe(Math.max(105, 100 - CHAT_DELAY_SEC + 5))
+  })
+})
+
 describe('findCandidates', () => {
   const duration = 3600
   const inputs = {
@@ -139,6 +153,19 @@ describe('findCandidates', () => {
 
   it('returns nothing for an empty stream', () => {
     expect(findCandidates({ ...inputs, messages: [], words: [], muted: [] }, { limit: 5 })).toEqual([])
+  })
+
+  it('finds the same moments with no taste history as with no adjustments at all', () => {
+    const withNoHistory = findCandidates(inputs, { limit: 10 }, deriveTasteAdjustments([]))
+    expect(withNoHistory).toEqual(cands)
+  })
+
+  it('reweighting chat vs audio changes which candidates rank strongest, without changing how many pass', () => {
+    const chatFavoured = findCandidates(inputs, { limit: 10 }, { ...DEFAULT_TASTE_ADJUSTMENTS, chatWeight: 1.5, audioWeight: 0.6 })
+    const audioFavoured = findCandidates(inputs, { limit: 10 }, { ...DEFAULT_TASTE_ADJUSTMENTS, chatWeight: 0.6, audioWeight: 1.5 })
+    expect(chatFavoured).toHaveLength(cands.length)
+    expect(audioFavoured).toHaveLength(cands.length)
+    expect(chatFavoured[0]!.strength).not.toBe(audioFavoured[0]!.strength)
   })
 })
 
