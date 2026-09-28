@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate } from './moments'
-import { buildPrompt, cleanTitle, combinedScore, excerptLines, excerptRange, parseAnswer, topChat, type Excerpt } from './llmPrompt'
+import { buildPrompt, buildScanPrompt, cleanTitle, scanWindows, combinedScore, excerptLines, excerptRange, parseAnswer, topChat, type Excerpt } from './llmPrompt'
 
 const cand: Candidate = {
   peak: 1010,
@@ -90,5 +90,24 @@ describe('titles and scores', () => {
   it('blends signal and rating', () => {
     expect(combinedScore(0.5, null)).toBe(0.5)
     expect(combinedScore(0.5, 10)).toBeCloseTo(0.725)
+  })
+})
+
+describe('transcript scan', () => {
+  const talk = Array.from({ length: 2000 }, (_, i) => ({ t0: i * 0.5, t1: i * 0.5 + 0.4, text: `w${i}` }))
+  it('picks talky windows away from known moments and muted parts', () => {
+    const w = scanWindows(1000, talk, [{ start: 200, end: 230 }], 180, 60)
+    expect(w[0]).toEqual({ start: 0, end: 180 })
+    expect(w.some((r) => r.start === 180)).toBe(false)
+    expect(w.every((r) => r.end <= 1000)).toBe(true)
+  })
+  it('skips quiet stretches', () => {
+    expect(scanWindows(1000, talk.slice(0, 50), [], 180, 60)).toEqual([])
+  })
+  it('asks for a strict rating and JSON', () => {
+    const p = buildScanPrompt({ title: 't', channel: 'c', chapter: null }, { offset: 0, range: { start: 0, end: 180 }, lines: ['[0.0] hi'] })
+    expect(p).toContain('[0.0] hi')
+    expect(p).toContain('Be strict')
+    expect(p).toContain('JSON')
   })
 })

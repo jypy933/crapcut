@@ -133,6 +133,9 @@ export class LlamaServer {
       '-ngl',
       this.gpu ? '999' : '0',
       '--jinja',
+      // Answers are short JSON; "thinking" models would waste the token budget.
+      '--reasoning-budget',
+      '0',
       '--no-webui'
     ]
     this.child = spawn(this.exe, args, { cwd: this.cwd, shell: false, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
@@ -171,14 +174,17 @@ export class LlamaServer {
       body: JSON.stringify({
         messages,
         temperature: 0.2,
-        max_tokens: 400,
+        max_tokens: 600,
+        chat_template_kwargs: { enable_thinking: false },
         response_format: { type: 'json_schema', json_schema: { name: 'answer', schema, strict: true } }
       }),
       signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)])
     })
     if (!res.ok) throw new Error(`llama-server HTTP ${res.status}: ${(await res.text()).slice(0, 500)}`)
-    const j = (await res.json()) as { choices?: { message?: { content?: string } }[] }
-    return j.choices?.[0]?.message?.content ?? ''
+    const j = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] }
+    const choice = j.choices?.[0]
+    if (choice?.finish_reason && choice.finish_reason !== 'stop') log.warn(`model stopped early: ${choice.finish_reason}`)
+    return choice?.message?.content ?? ''
   }
 
   stop(): void {

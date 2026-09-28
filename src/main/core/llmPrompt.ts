@@ -85,6 +85,40 @@ export function buildPrompt(ctx: PromptContext, c: Candidate, excerpt: Excerpt, 
   ].join('\n')
 }
 
+/** Prompt for scanning a stretch of transcript when chat gave too few moments. */
+export function buildScanPrompt(ctx: PromptContext, excerpt: Excerpt): string {
+  const len = excerpt.range.end - excerpt.range.start
+  return [
+    `Stream: "${sanitize(ctx.title)}" by ${sanitize(ctx.channel)}${ctx.chapter ? ` (playing: ${sanitize(ctx.chapter)})` : ''}.`,
+    `Excerpt: ${len.toFixed(0)} seconds starting at ${formatClock(excerpt.offset)} of the stream. Times below are seconds from the start of the excerpt.`,
+    '',
+    'Transcript of the streamer:',
+    excerpt.lines.join('\n'),
+    '',
+    'Task:',
+    `1. Is there a moment in this excerpt that would make a great ${CLIP_MIN_SEC}-${CLIP_MAX_SEC} second vertical clip on its own (funny, surprising, skillful, emotional or quotable)? If not, set keep to false.`,
+    '2. If yes, choose start and end in excerpt seconds: a hook in the first seconds, end right after the payoff. Do not cut a sentence in half.',
+    '3. Write a short catchy title (at most 60 characters) in the same language as the transcript. No hashtags, no quotes.',
+    '4. Rate it from 1 (boring) to 10 (must post). Be strict: most excerpts are a 3 or 4.',
+    'Answer as JSON: {"keep": boolean, "rating": integer, "start": number, "end": number, "title": string}'
+  ].join('\n')
+}
+
+/**
+ * Transcript windows worth scanning: about `windowSec` long, with enough
+ * speech, not muted and not overlapping moments already found.
+ */
+export function scanWindows(durationSec: number, words: Word[], avoid: Range[], windowSec = 180, minWords = 60): Range[] {
+  const out: Range[] = []
+  for (let start = 0; start < durationSec - 30; start += windowSec) {
+    const r = { start, end: Math.min(durationSec, start + windowSec) }
+    if (avoid.some((a) => a.start < r.end && r.start < a.end)) continue
+    if (wordsIn(words, r.start, r.end).length < minWords) continue
+    out.push(r)
+  }
+  return out
+}
+
 function sanitize(s: string): string {
   return s.replace(/[\r\n"]+/g, ' ').slice(0, 120)
 }

@@ -9,7 +9,19 @@ import { randomUUID } from 'node:crypto'
 import type { Clip, HardwareProfile, JobSummary, Range, StepId, VodInfo, Word } from '@shared/types'
 import { bestLag, envelope, pcm16ToFloat } from '../core/align'
 import { parseChatLog } from '../core/chat'
-import { buildPrompt, combinedScore, excerptLines, excerptRange, parseAnswer, SYSTEM_PROMPT, ANSWER_SCHEMA, topChat, type Refined } from '../core/llmPrompt'
+import {
+  ANSWER_SCHEMA,
+  buildPrompt,
+  buildScanPrompt,
+  combinedScore,
+  excerptLines,
+  excerptRange,
+  parseAnswer,
+  scanWindows,
+  SYSTEM_PROMPT,
+  topChat,
+  type Refined
+} from '../core/llmPrompt'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
 import { fallbackTitle, findCandidates, selectNonOverlapping, targetClipCount, type Candidate } from '../core/moments'
 import { mergeChunks, packWords, parseWhisperJson, planChunks, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
@@ -271,29 +283,36 @@ async function moments(ctx: StepContext): Promise<void> {
   const target = targetClipCount(duration)
   const candidates = findCandidates({ durationSec: duration, messages, loudness, words, muted }, { limit: Math.min(40, target * 2) })
   ctx.log.info(`${messages.length} chat messages, ${candidates.length} candidates, target ${target}`)
-  if (candidates.length === 0) {
-    ctx.store.replaceClips(ctx.job.id, [])
-    throw new UserError('No stand-out moments were found in this VOD. Chat and audio stayed calm the whole time.', { retryable: false })
-  }
 
-  const refined = await refineWithLlm(ctx, meta, candidates, messages, words, duration)
+  const llm = await openLlm(ctx)
+  let refined: (Refined | null)[] = candidates.map(() => null)
+  let scanned: Pick[] = []
+  try {
+    if (llm) refined = await refineCandidates(ctx, llm, meta, candidates, messages, words, duration)
+    const keptCount = candidates.filter((_, i) => refined[i]?.keep !== false).length
+    // A quiet chat gives too few moments: let the model read the transcript too.
+    if (llm && keptCount < target) {
+      const avoid = [...muted, ...candidates.map((c) => c.window)]
+      scanned = await scanTranscript(ctx, llm, meta, words, avoid, duration)
+    }
+  } finally {
+    llm?.close()
+  }
 
   let picks: Pick[] = candidates.map((cand, i) => {
     const r = refined[i] ?? null
     const window = r?.window ?? cand.window
-    return {
-      cand,
-      refined: r,
-      window,
-      title: r?.title ?? fallbackTitle(words, window),
-      score: combinedScore(cand.score, r?.rating ?? null),
-      strength: combinedScore(cand.score, r?.rating ?? null)
-    }
+    const score = combinedScore(cand.score, r?.rating ?? null)
+    return { cand, refined: r, window, title: r?.title ?? fallbackTitle(words, window), score, strength: score }
   })
   const kept = picks.filter((p) => p.refined?.keep !== false)
   // If the model rejected nearly everything, trust the signals for a few.
   picks = kept.length >= Math.min(3, picks.length) ? kept : picks
-  const chosen = selectNonOverlapping(picks, target)
+  const chosen = selectNonOverlapping([...picks, ...scanned], target)
+  if (chosen.length === 0) {
+    ctx.store.replaceClips(ctx.job.id, [])
+    throw new UserError('No stand-out moments were found in this VOD. Chat and audio stayed calm the whole time.', { retryable: false })
+  }
 
   const defaultLayoutId = ctx.store.get<string>('defaultLayoutId')
   const clips: Clip[] = chosen.map((p, i) => ({
@@ -315,70 +334,133 @@ async function moments(ctx: StepContext): Promise<void> {
     formats: { vertical: true, horizontal: false },
     reason: p.cand.reasons.join(' · ')
   }))
-  await writeJsonAtomic(join(ctx.dir, 'moments.json'), { candidates, refined, chosen: clips.map((c) => c.id) })
+  await writeJsonAtomic(join(ctx.dir, 'moments.json'), {
+    candidates,
+    refined,
+    scanned: scanned.map((p) => ({ window: p.window, title: p.title, score: p.score })),
+    chosen: clips.map((c) => c.id)
+  })
   ctx.store.replaceClips(ctx.job.id, clips)
 }
 
-async function refineWithLlm(
+interface LlmSession {
+  server: LlamaServer
+  close: () => void
+}
+
+/** Starts the local language model, or returns null (not installed / failed). */
+async function openLlm(ctx: StepContext): Promise<LlmSession | null> {
+  const exe = ctx.tools.path('llama')
+  const model = ctx.llmModelOverride ?? ctx.tools.path('model-llm-8b') ?? ctx.tools.path('model-llm-3b')
+  if (!exe || !model) {
+    ctx.log.info('language model not installed; using signals only')
+    return null
+  }
+  const release = await ctx.gpu.acquire(ctx.signal)
+  const server = new LlamaServer(exe, ctx.paths.root, relative(ctx.paths.root, model), ctx.hw.llm === 'vulkan')
+  ctx.progress(0.02, 'Starting the language model')
+  try {
+    await server.start(ctx.signal)
+  } catch (err) {
+    server.stop()
+    release()
+    if (isCancelled(err)) throw err
+    ctx.log.warn('language model failed to start; using signals only', err)
+    return null
+  }
+  return {
+    server,
+    close: () => {
+      server.stop()
+      release()
+    }
+  }
+}
+
+async function ask(ctx: StepContext, llm: LlmSession, prompt: string): Promise<string> {
+  return llm.server.complete(
+    [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: prompt }
+    ],
+    ANSWER_SCHEMA,
+    ctx.signal
+  )
+}
+
+async function refineCandidates(
   ctx: StepContext,
+  llm: LlmSession,
   meta: JobMeta,
   candidates: Candidate[],
   messages: ReturnType<typeof parseChatLog>,
   words: Word[],
   duration: number
 ): Promise<(Refined | null)[]> {
-  const exe = ctx.tools.path('llama')
-  const model = ctx.llmModelOverride ?? ctx.tools.path('model-llm-8b') ?? ctx.tools.path('model-llm-3b')
   const out: (Refined | null)[] = candidates.map(() => null)
-  if (!exe || !model) {
-    ctx.log.info('language model not installed; using signals only')
-    return out
-  }
-  const release = await ctx.gpu.acquire(ctx.signal)
-  const server = new LlamaServer(exe, ctx.paths.root, relative(ctx.paths.root, model), ctx.hw.llm === 'vulkan')
-  try {
-    ctx.progress(0.02, 'Starting the language model')
+  let failures = 0
+  for (let i = 0; i < candidates.length; i++) {
+    throwIfAborted(ctx.signal)
+    ctx.progress(0.05 + (0.55 * i) / candidates.length, null)
+    const c = candidates[i]!
+    const range = excerptRange(c, duration)
+    const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
+    const chapter = meta.chapters.find((ch) => c.event >= ch.start && c.event < ch.end)?.title ?? null
+    const prompt = buildPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, c, excerpt, topChat(messages, { start: c.peak - 12, end: c.peak + 5 }))
     try {
-      await server.start(ctx.signal)
+      const answer = await ask(ctx, llm, prompt)
+      out[i] = parseAnswer(answer, excerpt, duration)
+      if (!out[i]) ctx.log.warn('unusable model answer', answer.slice(0, 300))
     } catch (err) {
-      if (isCancelled(err)) throw err
-      ctx.log.warn('language model failed to start; using signals only', err)
-      return out
-    }
-    let failures = 0
-    for (let i = 0; i < candidates.length; i++) {
-      throwIfAborted(ctx.signal)
-      ctx.progress(0.05 + (0.95 * i) / candidates.length, null)
-      const c = candidates[i]!
-      const range = excerptRange(c, duration)
-      const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
-      const chapter = meta.chapters.find((ch) => c.event >= ch.start && c.event < ch.end)?.title ?? null
-      const prompt = buildPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, c, excerpt, topChat(messages, { start: c.peak - 12, end: c.peak + 5 }))
-      try {
-        const answer = await server.complete(
-          [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: prompt }
-          ],
-          ANSWER_SCHEMA,
-          ctx.signal
-        )
-        out[i] = parseAnswer(answer, excerpt, duration)
-        if (!out[i]) ctx.log.warn('unusable model answer', answer.slice(0, 300))
-      } catch (err) {
-        if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
-        ctx.log.warn('model request failed', err)
-        if (++failures >= 3) {
-          ctx.log.warn('too many model failures; using signals for the rest')
-          break
-        }
+      if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
+      ctx.log.warn('model request failed', err)
+      if (++failures >= 3) {
+        ctx.log.warn('too many model failures; using signals for the rest')
+        break
       }
     }
-    return out
-  } finally {
-    server.stop()
-    release()
   }
+  return out
+}
+
+/** Signal score given to moments found only in the transcript. */
+const TRANSCRIPT_SIGNAL = 0.3
+/** Transcript moments must be rated at least this high to be kept. */
+const TRANSCRIPT_MIN_RATING = 6
+
+async function scanTranscript(ctx: StepContext, llm: LlmSession, meta: JobMeta, words: Word[], avoid: Range[], duration: number): Promise<Pick[]> {
+  const windows = scanWindows(duration, words, avoid).slice(0, 160)
+  ctx.log.info(`scanning ${windows.length} transcript windows`)
+  const out: Pick[] = []
+  let failures = 0
+  for (let i = 0; i < windows.length; i++) {
+    throwIfAborted(ctx.signal)
+    ctx.progress(0.6 + (0.4 * i) / windows.length, 'Reading the transcript')
+    const range = windows[i]!
+    const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
+    const chapter = meta.chapters.find((ch) => range.start >= ch.start && range.start < ch.end)?.title ?? null
+    try {
+      const r = parseAnswer(await ask(ctx, llm, buildScanPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, excerpt)), excerpt, duration)
+      if (!r || !r.keep || r.rating < TRANSCRIPT_MIN_RATING) continue
+      const score = combinedScore(TRANSCRIPT_SIGNAL, r.rating)
+      const cand: Candidate = {
+        peak: (r.window.start + r.window.end) / 2,
+        event: r.window.start,
+        window: r.window,
+        strength: score,
+        score: TRANSCRIPT_SIGNAL,
+        chatZ: 0,
+        audioZ: 0,
+        reasons: ['Transcript']
+      }
+      out.push({ cand, refined: r, window: r.window, title: r.title ?? fallbackTitle(words, r.window), score, strength: score })
+    } catch (err) {
+      if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
+      ctx.log.warn('model request failed', err)
+      if (++failures >= 3) break
+    }
+  }
+  return out
 }
 
 // ---------------------------------------------------------------- clips
