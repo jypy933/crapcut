@@ -1,0 +1,48 @@
+name: Release
+
+# Pushing a tag like v0.2.0 builds the Windows installer on CI and publishes
+# it with the auto-update feed (latest.yml) to GitHub Releases.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check the tag matches package.json
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match package.json version $version" }
+
+      - run: npm ci
+
+      - name: Install FFmpeg for render tests (pinned, checksum verified)
+        shell: pwsh
+        run: ./scripts/ci/install-ffmpeg.ps1
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run test:ui
+
+      - name: Build installer and publish
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
