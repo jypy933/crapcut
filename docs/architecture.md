@@ -90,6 +90,10 @@ one-second test encode and falls back to libx264.
 - The LLM server listens on 127.0.0.1 with a random API key and lives only
   for the moments step.
 - Logs replace the home folder and user name before writing.
+- Updates: electron-updater checks the SHA-512 in `latest.yml`. Until the app
+  is code-signed (SignPath, planned), whoever controls the GitHub repository
+  controls updates, so the account uses 2FA, CI builds only go to **draft**
+  releases, and a human publishes each one.
 
 ## Tests
 

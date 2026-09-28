@@ -10,7 +10,9 @@ import { CancelledError } from '../util/errors'
 /** Returns the safe destination for an entry, or null if it would escape. */
 export function safeEntryPath(root: string, entryName: string): string | null {
   const name = entryName.replace(/\\/g, '/')
-  if (!name || name.includes('\0') || isAbsolute(name) || /^[a-zA-Z]:/.test(name)) return null
+  // No absolute paths, drive letters, NTFS streams ("a:b") or DOS device names.
+  if (!name || name.includes('\0') || name.includes(':') || isAbsolute(name)) return null
+  if (/(^|\/)(con|prn|aux|nul|com\d|lpt\d)(\.[^/]*)?(\/|$)/i.test(name)) return null
   const target = normalize(join(root, name))
   const rel = relative(root, target)
   if (!rel || rel.startsWith('..') || isAbsolute(rel) || rel.split(sep).includes('..')) return null

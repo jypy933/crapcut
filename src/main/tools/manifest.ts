@@ -167,7 +167,8 @@ export const ARTIFACTS: readonly Artifact[] = [
     entry: 'ggml-small-q8_0.bin',
     licence: { name: 'MIT', url: 'https://github.com/openai/whisper/blob/main/LICENSE', note: 'OpenAI Whisper weights, ggml conversion' },
     optional: false,
-    needed: (hw) => hw.whisper === 'cpu'
+    // Also on GPU machines: if the GPU fails, the CPU fallback needs a small model.
+    needed: () => true
   },
   {
     id: 'model-vad',

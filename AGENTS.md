@@ -121,7 +121,7 @@ close.
 ## Gotchas
 
 - Write files containing backslashes with an editor tool, not a shell heredoc
-  (the shell collapses `\`).
+  (the shell collapses double backslashes into one).
 - electron-vite 5 supports Vite up to 7: upgrade Vite, @vitejs/plugin-react and
   electron-vite together.
 - Paths passed to whisper.cpp, llama-server and the separator are relative to

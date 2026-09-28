@@ -87,8 +87,12 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          gh release create "${{ inputs.tag }}" dist/crapcut-separator-win-x64.zip dist/ggml-model-htdemucs-4s-f16.bin dist/SHA256SUMS.txt `
-            --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" `
-            --title "Voice separator tools (${{ inputs.tag }})" `
+          if ($env:TAG -notmatch '^tools-[a-z0-9.-]+$') { throw "Tag must look like tools-separator-2" }
+          gh release create $env:TAG dist/crapcut-separator-win-x64.zip dist/ggml-model-htdemucs-4s-f16.bin dist/SHA256SUMS.txt `
+            --repo $env:REPO --prerelease --target $env:SHA `
+            --title "Voice separator tools ($env:TAG)" `
             --notes "Built by CI from tools/demucs on demucs.cpp $env:DEMUCS_CPP_COMMIT (MIT). Weights: Meta's official htdemucs (MIT) converted to ggml. Not an app release."

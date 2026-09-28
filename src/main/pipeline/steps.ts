@@ -166,8 +166,11 @@ async function transcribe(ctx: StepContext): Promise<void> {
 
   const cuda = ctx.hw.whisper === 'cuda' ? ctx.tools.path('whisper-cuda') : null
   const cpu = ctx.tools.require('whisper-cpu')
-  const model = ctx.tools.path('model-whisper-large') ?? ctx.tools.path('model-whisper-small')
-  if (!model) throw new UserError('The speech model is missing. Open setup to download it again.', { retryable: false })
+  const large = ctx.tools.path('model-whisper-large')
+  const small = ctx.tools.path('model-whisper-small')
+  if (!large && !small) throw new UserError('The speech model is missing. Open setup to download it again.', { retryable: false })
+  // The large model on the GPU; the small one on the CPU (the large one is far too slow there).
+  const modelFor = (gpu: boolean): string => (gpu ? (large ?? small)! : (small ?? large)!)
   const vad = ctx.tools.path('model-vad')
   const root = ctx.paths.root
   const rel = (p: string): string => relative(root, p)
@@ -205,7 +208,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
         whisperChunk({
           whisper: gpu && cuda ? cuda : cpu,
           cwd: root,
-          model: rel(model),
+          model: rel(modelFor(gpu)),
           vadModel: vad ? rel(vad) : null,
           audio: rel(join(ctx.dir, 'audio16k.wav')),
           outBase: rel(outBase),

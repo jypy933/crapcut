@@ -180,5 +180,8 @@ describe('extractZip', () => {
     expect(safeEntryPath(root, 'C:/Windows/x')).toBeNull()
     expect(safeEntryPath(root, '/etc/passwd')).toBeNull()
     expect(safeEntryPath(root, 'a\\..\\..\\x')).toBeNull()
+    expect(safeEntryPath(root, 'file.txt:hidden')).toBeNull()
+    expect(safeEntryPath(root, 'bin/NUL.txt')).toBeNull()
+    expect(safeEntryPath(root, 'bin/console.exe')).toBe(join(root, 'bin', 'console.exe'))
   })
 })
