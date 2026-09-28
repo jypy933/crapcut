@@ -210,6 +210,7 @@ export interface LicenceNotice {
 export interface AppInfo {
   version: string
   outputDir: string
+  features: { voiceSeparation: boolean }
   licences: LicenceNotice[]
   update: UpdateState
 }

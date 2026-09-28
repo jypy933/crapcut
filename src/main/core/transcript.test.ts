@@ -43,6 +43,11 @@ describe('parseWhisperJson', () => {
     ])
   })
 
+  it('drops speaker dashes and bare punctuation', () => {
+    const r = parseWhisperJson({ transcription: [seg(0, 100, ' -'), seg(100, 300, ' - You'), seg(300, 500, ' ...'), seg(500, 700, ' go')] })
+    expect(r.words.map((w) => w.text)).toEqual(['You', 'go'])
+  })
+
   it('joins word pieces without a leading space', () => {
     const r = parseWhisperJson({ transcription: [seg(0, 200, ' don'), seg(200, 400, "'t"), seg(400, 600, ' go')] })
     expect(r.words.map((w) => w.text)).toEqual(["don't", 'go'])

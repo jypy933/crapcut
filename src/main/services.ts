@@ -7,6 +7,7 @@ import { resolvePaths, type AppPaths } from './paths'
 import { Exporter } from './pipeline/exporter'
 import { GpuLock } from './pipeline/gpuLock'
 import { JobRunner } from './pipeline/runner'
+import { stemsAvailable } from './pipeline/stems'
 import { Store } from './store'
 import { detectHardware } from './tools/gpu'
 import { ARTIFACTS, BUNDLED_NOTICES } from './tools/manifest'
@@ -82,7 +83,13 @@ export async function createServices(resources: string, getWindow: () => Browser
     exporter,
     updater,
     allowedLinks,
-    appInfo: () => ({ version: app.getVersion(), outputDir: paths.output, licences: notices, update: updater.current }),
+    appInfo: () => ({
+      version: app.getVersion(),
+      outputDir: paths.output,
+      features: { voiceSeparation: stemsAvailable(tools) },
+      licences: notices,
+      update: updater.current
+    }),
     onSetupFinished: () => {
       if (setup.isReady()) exporter.resumeQueued()
     }

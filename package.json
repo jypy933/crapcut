@@ -20,8 +20,9 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "node scripts/e2e.mjs",
-    "dist": "electron-vite build && electron-builder --win --publish never"
+    "e2e": "vitest run --config vitest.e2e.config.ts",
+    "dist": "electron-vite build && electron-builder --win --publish never",
+    "dev:ui": "vite --config vite.ui.config.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",

@@ -151,7 +151,13 @@ export function findCandidates(inputs: MomentInputs, opts: FindOptions): Candida
     raw.push({ peak, event, window, strength, score: strengthToScore(strength), chatZ: cz, audioZ: az, reasons })
   }
 
-  for (const p of findPeaks(chatZ, 2.5, 45)) {
+  // Start strict; relax when a quiet or short stream gives too few moments.
+  let chatPeaks = findPeaks(chatZ, 2.5, 45)
+  for (const minZ of [2, 1.6]) {
+    if (chatPeaks.filter((p) => p.t >= SKIP_START_SEC && p.t <= durationSec - SKIP_END_SEC).length >= opts.limit / 2) break
+    chatPeaks = findPeaks(chatZ, minZ, 45)
+  }
+  for (const p of chatPeaks) {
     if (p.t < SKIP_START_SEC || p.t > durationSec - SKIP_END_SEC) continue
     if (uniqueChatters(messages, p.onset - 2, p.t + 2) < 3) continue
     const az = Math.max(0, maxIn(audioZ, p.onset - CHAT_DELAY_SEC - 15, p.t - CHAT_DELAY_SEC + 5))

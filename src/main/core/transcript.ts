@@ -60,8 +60,9 @@ export function parseWhisperJson(json: unknown): { language: string | null; word
     const from = Number(seg.offsets?.from)
     const to = Number(seg.offsets?.to)
     if (!Number.isFinite(from) || !Number.isFinite(to)) continue
-    const text = raw.trim()
-    if (!text || NON_SPEECH.test(text)) continue
+    // Whisper marks speaker changes with a leading dash ("- Yeah").
+    const text = raw.trim().replace(/^[-–—]+\s*/, '')
+    if (!text || NON_SPEECH.test(text) || !/[\p{L}\p{N}]/u.test(text)) continue
     const t0 = from / 1000
     const t1 = Math.max(t0, to / 1000)
     const prev = words[words.length - 1]
