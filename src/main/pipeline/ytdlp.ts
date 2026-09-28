@@ -111,6 +111,30 @@ export async function fetchChannelVideos(ytdlp: string, channel: string, signal:
   }
 }
 
+/**
+ * Whether the channel is live right now. A channel's own page is the
+ * "twitch:stream" extractor: it succeeds with `is_live: true` while live,
+ * and fails with "The channel is not currently live" otherwise. Used to
+ * hold back an in-progress stream's own (still growing) VOD from the watch.
+ */
+export async function fetchChannelIsLive(ytdlp: string, channel: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const { stdout } = await runTool(ytdlp, ['--ignore-config', '--encoding', 'utf-8', '--no-colors', '--retries', '5', '--socket-timeout', '30', '--no-warnings', '-J', `https://www.twitch.tv/${channel}`], {
+      signal,
+      env: ENV,
+      timeoutMs: 60_000,
+      keepBytes: 512 * 1024
+    })
+    const raw = JSON.parse(stdout) as { is_live?: boolean; live_status?: string }
+    return raw.is_live === true || raw.live_status === 'is_live'
+  } catch (err) {
+    if (err instanceof Error && err.name === 'CancelledError') throw err
+    const text = err instanceof ToolFailedError ? err.stderrTail : err instanceof Error ? err.message : String(err)
+    if (/not currently live/i.test(text)) return false
+    throw channelYtdlpError(channel, err)
+  }
+}
+
 /** Parses our --progress-template line: "CC <done> <total> <estimate> <frag> <frags>". */
 export function parseYtdlpProgress(line: string): number | null {
   const m = /^CC (\S+) (\S+) (\S+) (\S+) (\S+)/.exec(line)
