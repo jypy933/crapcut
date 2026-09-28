@@ -100,6 +100,21 @@ describe('Store', () => {
     expect(store.exports(id)[0]).toMatchObject({ status: 'queued', progress: 0 })
   })
 
+  it('tracks best-of builds and requeues interrupted ones', () => {
+    const id = store.createJob('u', '7')
+    const other = store.createJob('u', '8')
+    store.addBestOf(other)
+    const b = store.addBestOf(id)
+    expect(store.bestOfList(id)).toMatchObject([{ status: 'queued', progress: 0 }])
+    store.updateBestOf(b, { status: 'running', progress: 0.5 })
+    expect(store.bestOfList(id)[0]).toMatchObject({ status: 'running', progress: 0.5 })
+    store.requeueInterruptedBestOf()
+    expect(store.bestOfList(id)[0]).toMatchObject({ status: 'queued', progress: 0 })
+    expect(store.bestOfList()).toHaveLength(2)
+    store.updateBestOf(b, { status: 'done', file: 'C:\\out\\best.mp4' })
+    expect(store.bestOfList(id)[0]).toMatchObject({ status: 'done', file: 'C:\\out\\best.mp4' })
+  })
+
   it('saves layouts and settings', () => {
     store.saveLayout({ id: 'l1', name: 'Cam', kind: 'cam_game', cam: { x: 0.7, y: 0.7, w: 0.3, h: 0.3 }, game: { x: 0, y: 0, w: 1, h: 1 } })
     store.saveLayout({ id: 'l1', name: 'Cam 2', kind: 'cam_game', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } })

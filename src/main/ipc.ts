@@ -19,7 +19,7 @@ const log = logger('ipc')
 type Handler<C extends InvokeChannel> = (...args: never[]) => Promise<InvokeResult[C]> | InvokeResult[C]
 
 export function registerIpc(services: AppServices, getWindow: () => BrowserWindow | null, devServer: string | undefined): void {
-  const { store, runner, exporter, setup, updater, paths, channelWatch } = services
+  const { store, runner, exporter, bestOf, setup, updater, paths, channelWatch } = services
 
   const handlers: { [C in InvokeChannel]: Handler<C> } = {
     'app:info': () => services.appInfo(),
@@ -106,6 +106,14 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
     'exports:cancel': (id: string) => exporter.cancel(id),
     'exports:show': (id: string) => {
       const item = exporter.list().find((e) => e.id === id)
+      if (item?.file && existsSync(item.file)) shell.showItemInFolder(item.file)
+    },
+
+    'bestOf:list': (jobId: string) => bestOf.list(jobId),
+    'bestOf:start': (jobId: string) => bestOf.start(jobId),
+    'bestOf:cancel': (id: string) => bestOf.cancel(id),
+    'bestOf:show': (id: string) => {
+      const item = bestOf.list().find((e) => e.id === id)
       if (item?.file && existsSync(item.file)) shell.showItemInFolder(item.file)
     },
 

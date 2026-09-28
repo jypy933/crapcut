@@ -2,7 +2,7 @@
 // Every request is validated with these schemas in main before it is used.
 
 import { z } from 'zod'
-import type { AppInfo, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
+import type { AppInfo, BestOfItem, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
 import { AUDIO_MODES } from './types'
 import { CAPTION_STYLE_IDS } from './captionStyles'
 import { EVENT_CHANNELS, type INVOKE_CHANNELS } from './channels'
@@ -78,6 +78,10 @@ export const Invoke = {
   'exports:start': z.tuple([id, z.array(id).min(1).max(200)]),
   'exports:cancel': z.tuple([id]),
   'exports:show': z.tuple([id]),
+  'bestOf:list': z.tuple([id]),
+  'bestOf:start': z.tuple([id]),
+  'bestOf:cancel': z.tuple([id]),
+  'bestOf:show': z.tuple([id]),
   'taste:status': z.tuple([]),
   'taste:reset': z.tuple([]),
   'channelWatch:status': z.tuple([]),
@@ -121,6 +125,10 @@ export interface InvokeResult {
   'exports:start': string[]
   'exports:cancel': void
   'exports:show': void
+  'bestOf:list': BestOfItem[]
+  'bestOf:start': string
+  'bestOf:cancel': void
+  'bestOf:show': void
   'taste:status': { tuned: boolean }
   'taste:reset': void,
   'channelWatch:status': ChannelWatchStatus
@@ -133,6 +141,7 @@ export interface Events {
   'setup:status': SetupStatus
   'jobs:changed': JobSummary
   'exports:changed': ExportItem
+  'bestOf:changed': BestOfItem
   'app:update': UpdateState
   'channelWatch:changed': ChannelWatchStatus
   /** A notification for a ready job was clicked; bring it into view. */

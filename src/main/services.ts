@@ -5,6 +5,7 @@ import type { AppInfo, HardwareProfile, LicenceNotice } from '@shared/types'
 import { ChannelWatchService } from './channelWatch'
 import { sendEvent } from './ipc'
 import { resolvePaths, type AppPaths } from './paths'
+import { BestOfBuilder } from './pipeline/bestOf'
 import { Exporter } from './pipeline/exporter'
 import { GpuLock } from './pipeline/gpuLock'
 import { JobRunner } from './pipeline/runner'
@@ -29,6 +30,7 @@ export interface AppServices {
   setup: SetupManager
   runner: JobRunner
   exporter: Exporter
+  bestOf: BestOfBuilder
   updater: Updater
   channelWatch: ChannelWatchService
   allowedLinks: ReadonlySet<string>
@@ -73,6 +75,9 @@ export async function createServices(resources: string, getWindow: () => Browser
   const exporter = new Exporter(store, paths, tools, () => hardware, gpu, {
     onChanged: (item) => sendEvent(getWindow(), 'exports:changed', item)
   })
+  const bestOf = new BestOfBuilder(store, paths, tools, exporter, {
+    onChanged: (item) => sendEvent(getWindow(), 'bestOf:changed', item)
+  })
   const updater = new Updater((s) => sendEvent(getWindow(), 'app:update', s))
   setup.onChange((s) => sendEvent(getWindow(), 'setup:status', s))
   const channelWatch = new ChannelWatchService({ store, tools, isReady: () => setup.isReady(), enqueueJob: (jobId) => runner.enqueue(jobId) })
@@ -85,7 +90,11 @@ export async function createServices(resources: string, getWindow: () => Browser
   const interrupted = store.markInterruptedJobs()
   if (interrupted.length) log.info(`${interrupted.length} job(s) paused after restart`)
   store.requeueInterruptedExports()
-  if (setup.isReady()) exporter.resumeQueued()
+  store.requeueInterruptedBestOf()
+  if (setup.isReady()) {
+    exporter.resumeQueued()
+    bestOf.resumeQueued()
+  }
 
   return {
     paths,
@@ -95,6 +104,7 @@ export async function createServices(resources: string, getWindow: () => Browser
     setup,
     runner,
     exporter,
+    bestOf,
     updater,
     channelWatch,
     allowedLinks,
@@ -106,7 +116,10 @@ export async function createServices(resources: string, getWindow: () => Browser
       update: updater.current
     }),
     onSetupFinished: () => {
-      if (setup.isReady()) exporter.resumeQueued()
+      if (setup.isReady()) {
+        exporter.resumeQueued()
+        bestOf.resumeQueued()
+      }
     }
   }
 }

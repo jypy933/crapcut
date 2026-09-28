@@ -119,7 +119,7 @@ app.on('will-quit', (event) => {
   s.updater.stop()
   s.channelWatch.stop()
   const timeout = new Promise((r) => setTimeout(r, 8000))
-  void Promise.race([Promise.all([s.runner.shutdown(), s.exporter.shutdown()]), timeout]).finally(() => {
+  void Promise.race([Promise.all([s.runner.shutdown(), s.exporter.shutdown(), s.bestOf.shutdown()]), timeout]).finally(() => {
     s.store.close()
     app.exit(0)
   })
