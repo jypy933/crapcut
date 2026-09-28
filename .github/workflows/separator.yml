@@ -1,0 +1,94 @@
+name: Build voice separator
+
+# Builds CrapCut's voice separator (tools/demucs, on top of demucs.cpp) and
+# converts Meta's official Demucs weights, then publishes both as assets of a
+# prerelease. The app downloads them like any other pinned tool (see
+# src/main/tools/manifest.ts); copy the SHA-256 values from the job summary.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag for the assets
+        required: true
+        default: tools-separator-1
+
+permissions:
+  contents: read
+
+env:
+  DEMUCS_CPP_COMMIT: f1206e9adeea103aef4a636b9e62297cf1f8e34e
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Get demucs.cpp (pinned)
+        shell: pwsh
+        run: |
+          git clone https://github.com/sevagh/demucs.cpp "$env:RUNNER_TEMP\demucs.cpp"
+          git -C "$env:RUNNER_TEMP\demucs.cpp" checkout $env:DEMUCS_CPP_COMMIT
+          git -C "$env:RUNNER_TEMP\demucs.cpp" submodule update --init vendor/eigen vendor/libnyquist
+
+      - name: Build (AVX2 and generic)
+        shell: pwsh
+        run: |
+          foreach ($arch in 'AVX2', 'SSE2') {
+            cmake -S tools/demucs -B "build-$arch" -G "Visual Studio 17 2022" -A x64 -DDEMUCS_DIR="$env:RUNNER_TEMP\demucs.cpp" -DDEMUCS_ARCH=$arch
+            cmake --build "build-$arch" --config Release --target crapcut-separate -- -m
+          }
+          New-Item -ItemType Directory -Force dist/separator | Out-Null
+          Copy-Item build-AVX2/Release/crapcut-separate.exe dist/separator/crapcut-separate.exe
+          Copy-Item build-SSE2/Release/crapcut-separate.exe dist/separator/crapcut-separate-sse2.exe
+          Copy-Item "$env:RUNNER_TEMP\demucs.cpp\LICENSE" dist/separator/LICENSE-demucs.cpp.txt
+          Copy-Item "$env:RUNNER_TEMP\demucs.cpp\vendor\libnyquist\LICENSE" dist/separator/LICENSE-libnyquist.txt
+          Copy-Item "$env:RUNNER_TEMP\demucs.cpp\vendor\eigen\COPYING.MPL2" dist/separator/LICENSE-eigen-MPL2.txt
+          Compress-Archive -Path dist/separator/* -DestinationPath dist/crapcut-separator-win-x64.zip
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Convert official Demucs weights (htdemucs, 4 sources)
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install demucs==4.0.1 "numpy<2"
+          python "$env:RUNNER_TEMP\demucs.cpp\scripts\convert-pth-to-ggml.py" dist/weights
+          Copy-Item dist/weights/ggml-model-htdemucs-4s-f16.bin dist/ggml-model-htdemucs-4s-f16.bin
+
+      - name: Install FFmpeg (pinned, checksum verified)
+        shell: pwsh
+        run: ./scripts/ci/install-ffmpeg.ps1
+
+      - name: Smoke test on generated audio
+        shell: pwsh
+        run: |
+          ffmpeg -v error -f lavfi -i "sine=frequency=220:duration=6:sample_rate=44100" -ac 2 test.wav
+          dist/separator/crapcut-separate.exe dist/ggml-model-htdemucs-4s-f16.bin test.wav voice.wav background.wav 4
+          if (-not (Test-Path voice.wav) -or -not (Test-Path background.wav)) { throw 'separator produced no output' }
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem dist/*.zip, dist/*.bin | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_).Hash.ToLower())  $($_.Name)  $($_.Length)" }
+          $lines | Set-Content dist/SHA256SUMS.txt
+          "### Separator assets`n``````" + "`n" + ($lines -join "`n") + "`n``````" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          $lines
+
+      - name: Publish prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.tag }}" dist/crapcut-separator-win-x64.zip dist/ggml-model-htdemucs-4s-f16.bin dist/SHA256SUMS.txt `
+            --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" `
+            --title "Voice separator tools (${{ inputs.tag }})" `
+            --notes "Built by CI from tools/demucs on demucs.cpp $env:DEMUCS_CPP_COMMIT (MIT). Weights: Meta's official htdemucs (MIT) converted to ggml. Not an app release."
