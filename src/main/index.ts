@@ -1,5 +1,6 @@
 // CrapCut main process entry.
 
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, Menu, dialog } from 'electron'
 import { registerIpc } from './ipc'
@@ -56,6 +57,18 @@ function createWindow(): BrowserWindow {
     }
   })
   w.once('ready-to-show', () => w.show())
+  // Development only: save a screenshot of the window (used to check the UI from scripts).
+  const capture = !app.isPackaged ? process.env.CRAPCUT_DEV_CAPTURE : undefined
+  if (capture) {
+    w.webContents.once('did-finish-load', () => {
+      setTimeout(() => {
+        void w.webContents.capturePage().then((img) => {
+          writeFileSync(capture, img.toPNG())
+          if (process.env.CRAPCUT_DEV_CAPTURE_EXIT) app.quit()
+        })
+      }, Number(process.env.CRAPCUT_DEV_CAPTURE_DELAY ?? 4000))
+    })
+  }
   w.on('closed', () => {
     win = null
   })

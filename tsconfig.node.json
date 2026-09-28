@@ -2,14 +2,15 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
-    "lib": ["ES2023"],
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals"],
+    "lib": ["ES2023", "DOM"]
   },
   "include": [
     "electron.vite.config.ts",
     "vitest.config.ts",
     "vitest.e2e.config.ts",
     "vite.ui.config.ts",
+    "vitest.ui.config.ts",
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",
