@@ -44,7 +44,19 @@ jobs:
       - run: npm run build
       - run: npm run test:ui
 
-      - name: Build installer and publish
+      # Create the draft first: electron-builder uploads in parallel and would
+      # otherwise race and create more than one draft.
+      - name: Create draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          gh release create $env:TAG --repo $env:REPO --draft --verify-tag --title $version --notes "CrapCut $version"
+
+      - name: Build installer and upload to the draft
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
