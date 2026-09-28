@@ -11,7 +11,7 @@ export default defineConfig({
     build: { rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } } }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    // Sandboxed preloads cannot require packages, so everything is bundled.
     resolve: { alias: { '@shared': shared } },
     build: {
       // Sandboxed preloads must be CommonJS.
