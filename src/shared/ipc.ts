@@ -2,7 +2,7 @@
 // Every request is validated with these schemas in main before it is used.
 
 import { z } from 'zod'
-import type { AppInfo, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
+import type { AppInfo, AutostartStatus, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
 import { AUDIO_MODES } from './types'
 import { CAPTION_STYLE_IDS } from './captionStyles'
 import { EVENT_CHANNELS, type INVOKE_CHANNELS } from './channels'
@@ -82,7 +82,9 @@ export const Invoke = {
   'taste:reset': z.tuple([]),
   'channelWatch:status': z.tuple([]),
   'channelWatch:set': z.tuple([z.string().max(200)]),
-  'channelWatch:clear': z.tuple([])
+  'channelWatch:clear': z.tuple([]),
+  'settings:getAutostart': z.tuple([]),
+  'settings:setAutostart': z.tuple([z.boolean()])
 } as const
 
 export type InvokeChannel = keyof typeof Invoke
@@ -126,6 +128,8 @@ export interface InvokeResult {
   'channelWatch:status': ChannelWatchStatus
   'channelWatch:set': SetChannelWatchResult
   'channelWatch:clear': void
+  'settings:getAutostart': AutostartStatus
+  'settings:setAutostart': AutostartStatus
 }
 
 /** Events pushed from main to the UI. */

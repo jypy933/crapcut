@@ -32,7 +32,9 @@ export const INVOKE_CHANNELS = [
   'taste:reset',
   'channelWatch:status',
   'channelWatch:set',
-  'channelWatch:clear'
+  'channelWatch:clear',
+  'settings:getAutostart',
+  'settings:setAutostart'
 ] as const
 
 export const EVENT_CHANNELS = ['setup:status', 'jobs:changed', 'exports:changed', 'app:update', 'channelWatch:changed', 'jobs:focus'] as const

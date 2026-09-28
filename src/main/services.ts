@@ -2,6 +2,7 @@
 
 import { app, Notification, type BrowserWindow } from 'electron'
 import type { AppInfo, HardwareProfile, LicenceNotice } from '@shared/types'
+import { AutostartManager } from './autostart'
 import { ChannelWatchService } from './channelWatch'
 import { sendEvent } from './ipc'
 import { resolvePaths, type AppPaths } from './paths'
@@ -31,6 +32,7 @@ export interface AppServices {
   exporter: Exporter
   updater: Updater
   channelWatch: ChannelWatchService
+  autostart: AutostartManager
   allowedLinks: ReadonlySet<string>
   appInfo: () => AppInfo
   onSetupFinished: () => void
@@ -77,6 +79,10 @@ export async function createServices(resources: string, getWindow: () => Browser
   setup.onChange((s) => sendEvent(getWindow(), 'setup:status', s))
   const channelWatch = new ChannelWatchService({ store, tools, isReady: () => setup.isReady(), enqueueJob: (jobId) => runner.enqueue(jobId) })
   channelWatch.onChange((s) => sendEvent(getWindow(), 'channelWatch:changed', s))
+  // Autostart's default follows the channel watch until the user picks explicitly.
+  const autostart = new AutostartManager(store, () => channelWatch.status().channel !== null)
+  channelWatch.onChange(() => autostart.sync())
+  autostart.sync()
 
   const notices = licenceNotices()
   const allowedLinks = new Set([PROJECT_URL, `${PROJECT_URL}/releases`, ...notices.map((n) => n.url)].map((u) => new URL(u).toString()))
@@ -97,6 +103,7 @@ export async function createServices(resources: string, getWindow: () => Browser
     exporter,
     updater,
     channelWatch,
+    autostart,
     allowedLinks,
     appInfo: () => ({
       version: app.getVersion(),
