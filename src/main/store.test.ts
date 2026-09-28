@@ -35,7 +35,8 @@ const clip = (jobId: string, rank: number): Clip => ({
   musicPath: null,
   layoutId: null,
   formats: { vertical: true, horizontal: false },
-  reason: 'Chat spike'
+  reason: 'Chat spike',
+  signals: { chatZ: 3, audioZ: 0.5, score: 0.6, rating: null, source: 'chat' }
 })
 
 describe('Store', () => {
@@ -107,6 +108,26 @@ describe('Store', () => {
     store.set('encoder', { id: 'h264_amf' })
     expect(store.get<{ id: string }>('encoder')).toEqual({ id: 'h264_amf' })
     expect(store.get('missing')).toBeNull()
+  })
+
+  it('records, updates and clears taste decisions', () => {
+    const decision = { status: 'accepted' as const, signals: { chatZ: 3, audioZ: 0, score: 0.6, rating: null, source: 'chat' as const }, suggested: { start: 0, end: 30 }, final: { start: 0, end: 30 } }
+    store.recordTasteDecision('c1', decision)
+    store.recordTasteDecision('c2', { ...decision, status: 'rejected' })
+    expect(store.getTasteHistory()).toHaveLength(2)
+
+    // Recording again for the same clip replaces its entry, not adds another.
+    store.recordTasteDecision('c1', { ...decision, final: { start: 2, end: 32 } })
+    const history = store.getTasteHistory()
+    expect(history).toHaveLength(2)
+    expect(history.find((d) => d.status === 'accepted')!.final).toEqual({ start: 2, end: 32 })
+
+    // Setting a clip back to pending removes it from history.
+    store.recordTasteDecision('c1', null)
+    expect(store.getTasteHistory()).toHaveLength(1)
+
+    store.clearTasteHistory()
+    expect(store.getTasteHistory()).toEqual([])
   })
 
   it('reopens an existing database', () => {

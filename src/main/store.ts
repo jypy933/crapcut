@@ -15,6 +15,7 @@ import {
   type StepState,
   type VodInfo
 } from '@shared/types'
+import type { TasteDecision } from './core/taste'
 
 const SCHEMA_VERSION = 1
 
@@ -71,6 +72,16 @@ const MIGRATIONS: Record<number, string> = {
 }
 
 const EXPORT_COLUMNS = new Set(['status', 'progress', 'file', 'error'])
+
+/** One review decision kept for taste learning, stored in the `kv` table. */
+interface StoredTasteDecision extends TasteDecision {
+  clipId: string
+  decidedAt: number
+}
+
+const TASTE_HISTORY_KEY = 'tasteHistory'
+/** Old decisions matter less than recent ones and the list must stay small. */
+const TASTE_HISTORY_MAX = 500
 
 const emptyStep = (): StepState => ({ status: 'pending', progress: 0, etaSec: null, detail: null })
 
@@ -328,5 +339,24 @@ export class Store {
 
   set(key: string, value: unknown): void {
     this.db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value))
+  }
+
+  // ---- taste history ----
+
+  getTasteHistory(): TasteDecision[] {
+    return this.get<StoredTasteDecision[]>(TASTE_HISTORY_KEY) ?? []
+  }
+
+  /** Records (or clears) the review decision for one clip, keyed by clip id. */
+  recordTasteDecision(clipId: string, decision: TasteDecision | null): void {
+    const all = this.get<StoredTasteDecision[]>(TASTE_HISTORY_KEY) ?? []
+    const next = all.filter((d) => d.clipId !== clipId)
+    if (decision) next.push({ ...decision, clipId, decidedAt: Date.now() })
+    while (next.length > TASTE_HISTORY_MAX) next.shift()
+    this.set(TASTE_HISTORY_KEY, next)
+  }
+
+  clearTasteHistory(): void {
+    this.set(TASTE_HISTORY_KEY, [])
   }
 }
