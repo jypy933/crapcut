@@ -16,6 +16,8 @@ export type ToolId =
   | 'model-vad'
   | 'model-llm-8b'
   | 'model-llm-3b'
+  | 'separator'
+  | 'model-demucs'
 
 export interface Licence {
   name: string
@@ -205,6 +207,37 @@ export const ARTIFACTS: readonly Artifact[] = [
     licence: { name: 'Apache-2.0', url: 'https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF' },
     optional: true,
     needed: (hw) => !bigLlm(hw)
+  },
+  {
+    id: 'separator',
+    label: 'Voice separator (demucs.cpp)',
+    version: 'tools-separator-1',
+    url: `${GH}/jypy933/crapcut/releases/download/tools-separator-1/crapcut-separator-win-x64.zip`,
+    sha256: 'a174d7b52de856b01f1ea1b0d92a6c85136048d9bfe3b22f1ea71ce4c12a1a57',
+    size: 2102181,
+    kind: 'zip',
+    include: /^(crapcut-separate(-sse2)?\.exe|LICENSE-[\w.-]+\.txt)$/,
+    entry: 'crapcut-separate.exe',
+    licence: {
+      name: 'MIT',
+      url: 'https://github.com/sevagh/demucs.cpp/blob/main/LICENSE',
+      note: 'Built by CrapCut CI from demucs.cpp; includes Eigen (MPL-2.0) and libnyquist (BSD-2-Clause)'
+    },
+    optional: true,
+    needed: () => true
+  },
+  {
+    id: 'model-demucs',
+    label: 'Voice separation model (Demucs htdemucs)',
+    version: 'htdemucs-4s-f16',
+    url: `${GH}/jypy933/crapcut/releases/download/tools-separator-1/ggml-model-htdemucs-4s-f16.bin`,
+    sha256: '72b17c42d308982ddb5069bc3bf48b81a5aac4cb6516e4366c0fa7cef6df0064',
+    size: 83994361,
+    kind: 'file',
+    entry: 'ggml-model-htdemucs-4s-f16.bin',
+    licence: { name: 'MIT', url: 'https://github.com/facebookresearch/demucs/blob/main/LICENSE', note: "Meta's official weights, converted by CrapCut CI" },
+    optional: true,
+    needed: () => true
   }
 ]
 

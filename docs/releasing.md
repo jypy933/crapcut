@@ -5,9 +5,13 @@
    `package.json` and creates a `vX.Y.Z` tag.
 3. Push: `git push --follow-tags`.
 4. The **Release** workflow tests, builds `CrapCut-Setup-X.Y.Z.exe` and
-   publishes it with `latest.yml` to GitHub Releases. Installed apps pick up the
-   update within a few hours (or on the next start) and offer "Restart to
-   update".
+   uploads it with `latest.yml` to a **draft** GitHub release.
+5. Check the draft (download and install it once), then click **Publish**.
+   Installed apps pick up the update within a few hours (or on the next start)
+   and offer "Restart to update".
+
+Tool releases (`tools-*` tags, e.g. the voice separator) are prereleases so the
+app's updater never mistakes them for app versions.
 
 Local installer build (not for distribution): `npm run dist` → `release/`.
 

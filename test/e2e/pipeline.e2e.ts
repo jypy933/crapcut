@@ -119,6 +119,20 @@ describe.skipIf(!VOD)('end to end on a real VOD', () => {
         if (item.format === 'vertical') expect([info.width, info.height]).toEqual([1080, 1920])
         else expect([info.width, info.height]).toEqual([1920, 1080])
       }
+
+      // Voice separation: export the same clip with "Voice + quieter game".
+      store.saveClip({ ...store.clip(best.id)!, audio: 'voice_game', formats: { vertical: true, horizontal: false } })
+      done.clear()
+      const t2 = Date.now()
+      const stemIds = exporter.add(jobId, [best.id])
+      while (done.size < stemIds.length) await new Promise((r) => setTimeout(r, 500))
+      console.log(`voice + game export finished in ${Math.round((Date.now() - t2) / 1000)} s`)
+      for (const item of done.values()) {
+        expect(item.status, item.error ?? '').toBe('done')
+        const info = await probeMedia(ffprobe, item.file!)
+        expect(info.hasAudio).toBe(true)
+        expect(Math.abs(info.duration - (best.end - best.start))).toBeLessThan(0.3)
+      }
       store.close()
     },
     3 * 60 * 60 * 1000

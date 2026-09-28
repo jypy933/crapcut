@@ -38,7 +38,8 @@ publish:
   - provider: github
     owner: jypy933
     repo: crapcut
-    releaseType: release
+    # CI uploads to a draft; publishing it on GitHub makes it the update.
+    releaseType: draft
 electronFuses:
   runAsNode: false
   enableCookieEncryption: true
