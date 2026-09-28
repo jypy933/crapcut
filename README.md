@@ -1,0 +1,71 @@
+# CrapCut
+
+Turn a stream VOD into short, captioned clips for TikTok, YouTube Shorts and
+Instagram Reels, on your own PC.
+
+Paste a link to a public Twitch VOD. CrapCut reads the chat replay and the
+audio, finds the moments chat went wild, and cuts vertical (9:16) and
+horizontal (16:9) clips with word-by-word captions. You review them, tweak the
+cut and the captions, and export.
+
+- **Free and local.** No account, no cloud AI, no subscription, no telemetry.
+  Speech-to-text (whisper.cpp) and the small language model (llama.cpp) run on
+  your graphics card.
+- **Built for long streams.** Only the audio and chat are downloaded to find
+  moments; video is downloaded just for the clips you keep. Every step resumes
+  if the app or PC is closed.
+- **Your layout.** Mark where your facecam is once; vertical clips put the cam
+  above the game automatically.
+
+> Status: early development. Not ready for use yet.
+
+## Requirements
+
+- Windows 10 or 11, 64-bit
+- 16 GB RAM recommended
+- An NVIDIA (CUDA) or AMD (Vulkan) graphics card is recommended; the CPU works
+  too, just slower
+- About 10 GB of free disk space for the tools and models, plus room for your
+  VODs' audio and clips
+
+## Install
+
+Download the latest `CrapCut-Setup-x.y.z.exe` from
+[Releases](https://github.com/jypy933/crapcut/releases). Early versions are not
+code-signed yet, so Windows SmartScreen asks once: click **More info → Run
+anyway**.
+
+On first launch CrapCut downloads the tools it needs (FFmpeg, yt-dlp,
+whisper.cpp, llama.cpp, TwitchDownloaderCLI) and the AI models from their
+official sources. Every file is pinned to an exact version and checked against
+a known SHA-256 checksum before use.
+
+## Development
+
+Requires Node 22+ and Git. FFmpeg on `PATH` is used by the render tests.
+
+```bash
+npm install
+npm start          # run the app in development
+npm test           # unit and render tests
+npm run typecheck
+npm run build      # production build
+npm run dist       # Windows installer (release/)
+```
+
+See [AGENTS.md](AGENTS.md) for the design brief and
+[docs/architecture.md](docs/architecture.md) for how it fits together.
+
+## Privacy
+
+CrapCut has no servers and collects nothing. It talks to the network only to
+download the VOD you paste, the tools and models on first run, and to check
+GitHub Releases for updates. See [docs/code-signing-policy.md](docs/code-signing-policy.md).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). CrapCut downloads third-party tools and models
+that keep their own licences; the About screen and
+[docs/third-party.md](docs/third-party.md) list them.
+
+CrapCut is not affiliated with Twitch, TikTok, YouTube or Instagram.

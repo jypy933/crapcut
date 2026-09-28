@@ -1,6 +1,27 @@
+# dependencies and build output
 node_modules/
-dist/
 out/
+dist/
+release/
+coverage/
+*.tsbuildinfo
+
+# media never goes in git
 *.mp4
+*.mkv
 *.mov
+*.webm
 *.wav
+*.m4a
+*.aac
+*.mp3
+*.gguf
+*.bin
+
+# local state
+.env
+.env.*
+*.log
+.test-tmp/
+.e2e/
+.claude/settings.local.json
