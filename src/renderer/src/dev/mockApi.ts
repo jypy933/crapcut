@@ -106,7 +106,8 @@ let clips: Clip[] = titles.map((title, i) => {
     musicPath: null,
     layoutId: null,
     formats: { vertical: true, horizontal: false },
-    reason: i % 2 ? 'Chat spike · laughter' : 'Chat spike · hype · loud'
+    reason: i % 2 ? 'Chat spike · laughter' : 'Chat spike · hype · loud',
+    signals: { chatZ: 3.2, audioZ: 1.1, score: 0.7, rating: 7, source: i % 2 ? 'chat' : 'audio' }
   }
 })
 let layouts: Layout[] = []
@@ -150,7 +151,9 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
     exports = ids.map((clipId, i) => ({ id: `exp-cccccc0${i}`, jobId, clipId, format: 'vertical', status: i ? 'queued' : 'running', progress: 0.35, etaSec: 40, file: null, error: null, createdAt: Date.now() }))
     for (const e of exports) emit('exports:changed', e)
     return exports.map((e) => e.id)
-  }
+  },
+  'taste:status': () => ({ tuned: true }),
+  'taste:reset': () => undefined
 }
 
 export function installMockApi(sampleVideo: string): void {
