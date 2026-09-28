@@ -3,7 +3,7 @@
 CrapCut releases are built from this public repository by GitHub Actions
 ([`release.yml`](../.github/workflows/release.yml)) when a version tag is
 pushed. Early versions (0.x) are **not code-signed**; Windows SmartScreen asks
-once ("More info → Run anyway").
+once ("More info -> Run anyway").
 
 After the first stable release, the project will apply to the
 [SignPath Foundation](https://signpath.org) for free code signing of open-source

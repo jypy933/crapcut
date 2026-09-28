@@ -201,7 +201,7 @@ export class JobRunner {
         const retryable = !(err instanceof UserError) || err.retryable
         if (retryable && NETWORK_STEPS.has(step) && attempt < MAX_AUTO_RETRIES) {
           log.warn(`${id.slice(0, 8)} ${step} failed (attempt ${attempt + 1}), retrying`, err)
-          this.store.setStep(id, step, { detail: 'Connection problem, retrying…' })
+          this.store.setStep(id, step, { detail: 'Connection problem, retrying...' })
           this.emit(id, true)
           const wait = (this.options.retryDelayMs ?? 5000) * 2 ** attempt
           // Wait, but wake up at once if the user pauses (the next attempt then stops cleanly).

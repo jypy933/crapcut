@@ -21,7 +21,7 @@ export function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
-/** 3725.4 → "1:02:05"; 65 → "1:05". */
+/** 3725.4 -> "1:02:05"; 65 -> "1:05". */
 export function formatClock(sec: number): string {
   const s = Math.max(0, Math.floor(sec))
   const h = Math.floor(s / 3600)
@@ -30,7 +30,7 @@ export function formatClock(sec: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`
 }
 
-/** 34.56 → "34.6 s"; 75 → "1:15". */
+/** 34.56 -> "34.6 s"; 75 -> "1:15". */
 export function formatLength(sec: number): string {
   return sec < 60 ? `${sec.toFixed(1)} s` : formatClock(sec)
 }

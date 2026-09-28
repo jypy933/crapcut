@@ -6,7 +6,7 @@ can only call a small, validated IPC API.
 
 ```
 renderer (sandboxed React UI)
-   │  window.crapcut.invoke(channel, args)      ← preload exposes only this
+   │  window.crapcut.invoke(channel, args)      <- preload exposes only this
    ▼
 main process
    ├─ ipc.ts          checks sender, validates args with zod, returns results
@@ -14,7 +14,7 @@ main process
    ├─ store.ts        SQLite (node:sqlite): jobs, steps, clips, layouts, exports
    ├─ pipeline/
    │   ├─ runner.ts   one job at a time, step checkpoints, retries, pause/continue
-   │   ├─ steps.ts    metadata → chat → audio → transcribe → moments → clips
+   │   ├─ steps.ts    metadata -> chat -> audio -> transcribe -> moments -> clips
    │   ├─ exporter.ts export lane: renders kept clips one at a time
    │   └─ gpuLock.ts  one AI model on the GPU at a time
    ├─ tools/          pinned downloads, checksums, GPU detection, process runner
@@ -33,7 +33,7 @@ is already on disk and carries on.
 | metadata | yt-dlp `-J`, audio playlist | `meta.json` (title, length, chapters, muted ranges) |
 | chat | TwitchDownloaderCLI | `chat.txt` |
 | audio | yt-dlp (audio only), FFmpeg | `audio.mp4`, `audio16k.wav` (temporary), `loudness.txt`, `muted.json` |
-| transcribe | whisper.cpp, 10-minute chunks cut at quiet seconds | `transcript/chunk-NNN.json` → `transcript.json` |
+| transcribe | whisper.cpp, 10-minute chunks cut at quiet seconds | `transcript/chunk-NNN.json` -> `transcript.json` |
 | moments | `core/moments.ts` + llama-server | clips in SQLite, `moments.json` |
 | clips | yt-dlp `--download-sections` + audio alignment | `clips/<clip>.mp4` |
 

@@ -1,7 +1,7 @@
 # Security policy
 
 Please report security problems privately through GitHub:
-**Security → Report a vulnerability** on
+**Security -> Report a vulnerability** on
 [jypy933/crapcut](https://github.com/jypy933/crapcut/security/advisories/new).
 Do not open a public issue for security problems.
 

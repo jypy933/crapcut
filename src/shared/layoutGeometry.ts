@@ -25,7 +25,7 @@ export const OUTPUT_SIZE: Record<RenderFormat, Size> = {
 const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n))
 
-/** Normalised rect → whole even pixels inside the frame. */
+/** Normalised rect -> whole even pixels inside the frame. */
 export function toPixels(r: Rect, size: Size): PixelRect {
   const x = clamp(r.x, 0, 1)
   const y = clamp(r.y, 0, 1)

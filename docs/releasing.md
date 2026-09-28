@@ -13,7 +13,7 @@
 Tool releases (`tools-*` tags, e.g. the voice separator) are prereleases so the
 app's updater never mistakes them for app versions.
 
-Local installer build (not for distribution): `npm run dist` → `release/`.
+Local installer build (not for distribution): `npm run dist` -> `release/`.
 
 ## Before handing a build to someone
 

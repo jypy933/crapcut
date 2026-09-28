@@ -38,7 +38,7 @@ const setup = (): SetupStatus => ({
   hardware: { gpus: [], primary: { vendor: 'nvidia', name: 'NVIDIA GeForce RTX 3080', vramMb: 10240 }, whisper: 'cuda', llm: 'vulkan', totalRamMb: 16384, cpuThreads: 16 }
 })
 
-const vod = { id: '2883949120', title: 'Late night ranked grind — road to top 500', channel: 'streamer', durationSec: 5 * 3600 + 1234, createdAt: null, thumbnailUrl: null }
+const vod = { id: '2883949120', title: 'Late night ranked grind, road to top 500', channel: 'streamer', durationSec: 5 * 3600 + 1234, createdAt: null, thumbnailUrl: null }
 
 const jobs: JobSummary[] = [
   {
@@ -86,7 +86,7 @@ function words(start: number, text: string): Word[] {
   return text.split(' ').map((t, i) => ({ t0: start + i * 0.38, t1: start + i * 0.38 + 0.32, text: t }))
 }
 
-const titles = ['He did NOT see that coming', 'Chat lost it at this', 'The cleanest clutch ever', 'Wait for the ending…', 'Worst luck of the stream', 'This is why we don’t trust him']
+const titles = ['He did NOT see that coming', 'Chat lost it at this', 'The cleanest clutch ever', 'Wait for the ending...', 'Worst luck of the stream', "This is why we don't trust him"]
 let clips: Clip[] = titles.map((title, i) => {
   const start = 1000 + i * 1500
   return {

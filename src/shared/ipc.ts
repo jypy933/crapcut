@@ -46,7 +46,7 @@ export type ClipPatch = z.infer<typeof ClipPatchSchema>
 
 export type CreateJobResult = { ok: true; jobId: string; existing: boolean } | { ok: false; reason: string }
 
-/** Request channels: name → [input schema]. */
+/** Request channels: name -> [input schema]. */
 export const Invoke = {
   'app:info': z.tuple([]),
   'app:openLogFolder': z.tuple([]),

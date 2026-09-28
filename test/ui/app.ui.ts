@@ -36,7 +36,7 @@ describe.skipIf(!built)('app smoke test', () => {
     const l = await launch(home)
     app = l.app
     const page = l.page
-    await page.getByText('Let’s get CrapCut ready').waitFor({ timeout: 30_000 })
+    await page.getByText("Let's get CrapCut ready").waitFor({ timeout: 30_000 })
     expect(await page.getByText('FFmpeg').count()).toBeGreaterThan(0)
 
     // The page is served from our own protocol with a strict CSP.
@@ -98,7 +98,7 @@ describe.skipIf(!built || !VOD || !existsSync(join(e2eHome, 'tools')))('full flo
       const l = await launch(e2eHome)
       app = l.app
       const page = l.page
-      await page.getByPlaceholder('https://www.twitch.tv/videos/…').fill(VOD)
+      await page.getByPlaceholder('https://www.twitch.tv/videos/...').fill(VOD)
       await page.getByRole('button', { name: 'Find clips' }).click()
       await page.getByRole('button', { name: /Review/ }).first().waitFor({ timeout: 60 * 60 * 1000 })
       await page.getByRole('button', { name: /Review/ }).first().click()

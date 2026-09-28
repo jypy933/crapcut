@@ -37,7 +37,7 @@ cut and the captions, and export.
 
 Download the latest `CrapCut-Setup-x.y.z.exe` from
 [Releases](https://github.com/jypy933/crapcut/releases). Early versions are not
-code-signed yet, so Windows SmartScreen asks once: click **More info → Run
+code-signed yet, so Windows SmartScreen asks once: click **More info -> Run
 anyway**.
 
 On first launch CrapCut downloads the tools it needs (FFmpeg, yt-dlp,
@@ -66,8 +66,7 @@ End-to-end on a real short VOD (downloads the pinned tools into `.e2e/`):
 E2E_VOD=https://www.twitch.tv/videos/<id> npm run e2e
 ```
 
-See [AGENTS.md](AGENTS.md) for the design brief and
-[docs/architecture.md](docs/architecture.md) for how it fits together.
+See [docs/architecture.md](docs/architecture.md) for how it fits together.
 
 ## Privacy
 

@@ -7,11 +7,11 @@ import { Spinner } from '../components/ui'
 function updateLine(u: UpdateState): string {
   switch (u.kind) {
     case 'checking':
-      return 'Checking for updates…'
+      return 'Checking for updates...'
     case 'available':
-      return `Version ${u.version} is available, downloading…`
+      return `Version ${u.version} is available, downloading...`
     case 'downloading':
-      return `Downloading update… ${Math.round(u.progress * 100)}%`
+      return `Downloading update... ${Math.round(u.progress * 100)}%`
     case 'ready':
       return `Version ${u.version} is ready. Restart to update.`
     case 'none':
@@ -56,7 +56,7 @@ export function About({ update }: { update: UpdateState }): ReactNode {
           <FileText size={14} /> Open log folder
         </button>
       </div>
-      <p className="small faint">If something goes wrong, send the file “crapcut.log” from the log folder. It has no personal information.</p>
+      <p className="small faint">If something goes wrong, send the file crapcut.log from the log folder. It has no personal information.</p>
 
       <h2 style={{ marginTop: 34 }}>Privacy</h2>
       <p className="muted small">

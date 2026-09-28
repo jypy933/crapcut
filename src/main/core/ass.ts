@@ -39,7 +39,7 @@ export function defaultAssStyle(format: 'vertical' | 'horizontal', y: number, up
   }
 }
 
-/** #RRGGBB → ASS &HAABBGGRR (alpha 00 = opaque). */
+/** #RRGGBB -> ASS &HAABBGGRR (alpha 00 = opaque). */
 export function assColor(hex: string, alpha = 0): string {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex)
   if (!m) throw new Error(`bad colour ${hex}`)
@@ -47,12 +47,12 @@ export function assColor(hex: string, alpha = 0): string {
   return `&H${a}${m[3]}${m[2]}${m[1]}`.toUpperCase()
 }
 
-/** #RRGGBB → inline override colour "&HBBGGRR&". */
+/** #RRGGBB -> inline override colour "&HBBGGRR&". */
 export function inlineColor(hex: string): string {
   return `${assColor(hex).replace(/^&H00/, '&H')}&`
 }
 
-/** Seconds → ASS time "H:MM:SS.cc". */
+/** Seconds -> ASS time "H:MM:SS.cc". */
 export function assTime(sec: number): string {
   const cs = Math.max(0, Math.round(sec * 100))
   const h = Math.floor(cs / 360000)

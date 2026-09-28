@@ -56,7 +56,7 @@ export function Home({ go }: { go: (r: Route) => void }): ReactNode {
       <form className="paste" onSubmit={(e) => void submit(e)}>
         <input
           className="input big"
-          placeholder="https://www.twitch.tv/videos/…"
+          placeholder="https://www.twitch.tv/videos/..."
           value={link}
           onChange={(e) => {
             setLink(e.target.value)
@@ -121,9 +121,9 @@ function statusLine(job: JobSummary): ReactNode {
     case 'cancelled':
       return <span className="faint">Stopped</span>
     case 'queued':
-      return <span className="muted">Waiting for the job before it…</span>
+      return <span className="muted">Waiting for the job before it...</span>
     case 'running': {
-      if (!step) return <span className="muted">Finishing…</span>
+      if (!step) return <span className="muted">Finishing...</span>
       const s = job.steps[step]
       const eta = formatEta(s.etaSec)
       return (
@@ -141,7 +141,7 @@ function statusLine(job: JobSummary): ReactNode {
 function JobCard({ job, go }: { job: JobSummary; go: (r: Route) => void }): ReactNode {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const title = job.vod?.title ?? `Twitch VOD ${job.vodId}`
-  const sub = job.vod ? `${job.vod.channel} · ${formatClock(job.vod.durationSec)}` : 'Reading the VOD…'
+  const sub = job.vod ? `${job.vod.channel} · ${formatClock(job.vod.durationSec)}` : 'Reading the VOD...'
   const running = job.status === 'running' || job.status === 'queued'
 
   return (
@@ -204,7 +204,7 @@ function JobCard({ job, go }: { job: JobSummary; go: (r: Route) => void }): Reac
         </div>
       )}
       <div className="small">{statusLine(job)}</div>
-      {confirmDelete && <div className="small faint">Deletes this job’s downloads and clips from CrapCut. Exported videos stay in your Videos folder.</div>}
+      {confirmDelete && <div className="small faint">Deletes this job's downloads and clips from CrapCut. Exported videos stay in your Videos folder.</div>}
     </div>
   )
 }

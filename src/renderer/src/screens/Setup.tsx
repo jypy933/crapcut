@@ -21,9 +21,9 @@ export function Setup({ status }: { status: SetupStatus }): ReactNode {
 
   return (
     <div className="setup">
-      <h1>Let’s get CrapCut ready</h1>
+      <h1>Let's get CrapCut ready</h1>
       <p className="muted">
-        CrapCut downloads the free tools and AI models it needs, once. Everything runs on this PC — no account, nothing uploaded.
+        CrapCut downloads the free tools and AI models it needs, once. Everything runs on this PC: no account, nothing uploaded.
       </p>
 
       <div className="row small faint" style={{ marginTop: 14 }}>
@@ -50,10 +50,10 @@ export function Setup({ status }: { status: SetupStatus }): ReactNode {
               {(c.state === 'downloading' || c.state === 'verifying' || c.state === 'installing') && (
                 <ProgressBar value={c.state === 'downloading' ? c.progress : 1} good={c.state !== 'downloading'} />
               )}
-              {c.state === 'failed' && c.optional && <div className="small faint">Optional — CrapCut still works, clips just get simpler titles.</div>}
+              {c.state === 'failed' && c.optional && <div className="small faint">Optional. CrapCut still works, clips just get simpler titles.</div>}
             </div>
             <span className="small faint" style={{ textAlign: 'right' }}>
-              {c.state === 'verifying' ? 'Checking…' : c.state === 'installing' ? 'Installing…' : formatBytes(c.sizeBytes)}
+              {c.state === 'verifying' ? 'Checking...' : c.state === 'installing' ? 'Installing...' : formatBytes(c.sizeBytes)}
             </span>
           </div>
         ))}

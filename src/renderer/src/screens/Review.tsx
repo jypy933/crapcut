@@ -222,7 +222,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
                 onCaptionY={(y) => void update(clip.id, { captions: { ...clip.captions, y } })}
               />
             ) : (
-              <div className="viewport muted">This clip’s video has not been downloaded.</div>
+              <div className="viewport muted">This clip's video has not been downloaded.</div>
             )}
             {clip.source && (
               <div className="transport">
