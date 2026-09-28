@@ -22,6 +22,7 @@ export function App(): ReactNode {
   useEvent('app:update', setUpdate)
 
   const go = useCallback((r: Route) => setRoute(r), [])
+  useEvent('jobs:focus', ({ jobId }) => go({ name: 'review', jobId }))
 
   let body: ReactNode
   if (route.name === 'about') body = <About update={update} />
