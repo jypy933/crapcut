@@ -20,7 +20,8 @@ import type { TasteDecision } from './core/taste'
 
 const SCHEMA_VERSION = 2
 
-const MIGRATIONS: Record<number, string> = {
+/** Exported so tests can build a real "database from an older version" without duplicating the SQL. */
+export const MIGRATIONS: Record<number, string> = {
   1: `
     CREATE TABLE jobs (
       id TEXT PRIMARY KEY,
