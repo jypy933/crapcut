@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import {
   STEP_IDS,
+  type BestOfItem,
   type Clip,
   type ExportItem,
   type JobStatus,
@@ -17,9 +18,10 @@ import {
 } from '@shared/types'
 import type { TasteDecision } from './core/taste'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
-const MIGRATIONS: Record<number, string> = {
+/** Exported so tests can build a real "database from an older version" without duplicating the SQL. */
+export const MIGRATIONS: Record<number, string> = {
   1: `
     CREATE TABLE jobs (
       id TEXT PRIMARY KEY,
@@ -68,10 +70,22 @@ const MIGRATIONS: Record<number, string> = {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+  `,
+  2: `
+    CREATE TABLE best_of (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      progress REAL NOT NULL DEFAULT 0,
+      file TEXT,
+      error TEXT,
+      created_at INTEGER NOT NULL
+    );
   `
 }
 
 const EXPORT_COLUMNS = new Set(['status', 'progress', 'file', 'error'])
+const BEST_OF_COLUMNS = new Set(['status', 'progress', 'file', 'error'])
 
 /** One review decision kept for taste learning, stored in the `kv` table. */
 interface StoredTasteDecision extends TasteDecision {
@@ -328,6 +342,48 @@ export class Store {
   /** Exports cut short by a crash go back to the queue. */
   requeueInterruptedExports(): void {
     this.db.prepare("UPDATE exports SET status = 'queued', progress = 0 WHERE status = 'running'").run()
+  }
+
+  // ---- best-of ----
+
+  addBestOf(jobId: string): string {
+    const id = randomUUID()
+    this.db.prepare('INSERT INTO best_of (id, job_id, status, created_at) VALUES (?, ?, ?, ?)').run(id, jobId, 'queued', Date.now())
+    return id
+  }
+
+  bestOfList(jobId?: string): BestOfItem[] {
+    const rows = (
+      jobId
+        ? this.db.prepare('SELECT * FROM best_of WHERE job_id = ? ORDER BY created_at').all(jobId)
+        : this.db.prepare('SELECT * FROM best_of ORDER BY created_at').all()
+    ) as { id: string; job_id: string; status: string; progress: number; file: string | null; error: string | null; created_at: number }[]
+    return rows.map((r) => ({
+      id: r.id,
+      jobId: r.job_id,
+      status: r.status as BestOfItem['status'],
+      progress: r.progress,
+      etaSec: null,
+      file: r.file,
+      error: r.error,
+      createdAt: r.created_at
+    }))
+  }
+
+  updateBestOf(id: string, patch: Partial<Pick<BestOfItem, 'status' | 'progress' | 'file' | 'error'>>): void {
+    const sets: string[] = []
+    const vals: (string | number | null)[] = []
+    for (const [k, v] of Object.entries(patch)) {
+      if (!BEST_OF_COLUMNS.has(k)) continue
+      sets.push(`${k} = ?`)
+      vals.push(v as string | number | null)
+    }
+    if (sets.length) this.db.prepare(`UPDATE best_of SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id)
+  }
+
+  /** Builds cut short by a crash go back to the queue. */
+  requeueInterruptedBestOf(): void {
+    this.db.prepare("UPDATE best_of SET status = 'queued', progress = 0 WHERE status = 'running'").run()
   }
 
   // ---- settings ----

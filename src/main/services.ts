@@ -6,6 +6,7 @@ import { AutostartManager } from './autostart'
 import { ChannelWatchService } from './channelWatch'
 import { sendEvent } from './ipc'
 import { resolvePaths, type AppPaths } from './paths'
+import { BestOfBuilder } from './pipeline/bestOf'
 import { Exporter } from './pipeline/exporter'
 import { GpuLock } from './pipeline/gpuLock'
 import { JobRunner } from './pipeline/runner'
@@ -30,6 +31,7 @@ export interface AppServices {
   setup: SetupManager
   runner: JobRunner
   exporter: Exporter
+  bestOf: BestOfBuilder
   updater: Updater
   channelWatch: ChannelWatchService
   autostart: AutostartManager
@@ -52,6 +54,11 @@ export async function createServices(resources: string, getWindow: () => Browser
   const tools = new ToolRegistry(paths.tools, paths.downloads, (url, init) => fetch(url, init))
   const setup = new SetupManager(tools, hardware, paths.root)
   const gpu = new GpuLock()
+  // A separate lock (not the AI-model one above): keeps a normal export and a
+  // best-of build from encoding at the same time -- two full encodes plus a
+  // possible stem separation is too much for the friend's PC and its
+  // hardware encoder session.
+  const encodeLock = new GpuLock()
 
   const runner = new JobRunner(store, paths, tools, () => hardware, gpu, {
     onJobChanged: (job) => sendEvent(getWindow(), 'jobs:changed', job),
@@ -72,8 +79,11 @@ export async function createServices(resources: string, getWindow: () => Browser
       }
     }
   })
-  const exporter = new Exporter(store, paths, tools, () => hardware, gpu, {
+  const exporter = new Exporter(store, paths, tools, () => hardware, gpu, encodeLock, {
     onChanged: (item) => sendEvent(getWindow(), 'exports:changed', item)
+  })
+  const bestOf = new BestOfBuilder(store, paths, tools, exporter, encodeLock, {
+    onChanged: (item) => sendEvent(getWindow(), 'bestOf:changed', item)
   })
   const updater = new Updater((s) => sendEvent(getWindow(), 'app:update', s))
   setup.onChange((s) => sendEvent(getWindow(), 'setup:status', s))
@@ -91,7 +101,11 @@ export async function createServices(resources: string, getWindow: () => Browser
   const interrupted = store.markInterruptedJobs()
   if (interrupted.length) log.info(`${interrupted.length} job(s) paused after restart`)
   store.requeueInterruptedExports()
-  if (setup.isReady()) exporter.resumeQueued()
+  store.requeueInterruptedBestOf()
+  if (setup.isReady()) {
+    exporter.resumeQueued()
+    bestOf.resumeQueued()
+  }
 
   return {
     paths,
@@ -101,6 +115,7 @@ export async function createServices(resources: string, getWindow: () => Browser
     setup,
     runner,
     exporter,
+    bestOf,
     updater,
     channelWatch,
     autostart,
@@ -113,7 +128,10 @@ export async function createServices(resources: string, getWindow: () => Browser
       update: updater.current
     }),
     onSetupFinished: () => {
-      if (setup.isReady()) exporter.resumeQueued()
+      if (setup.isReady()) {
+        exporter.resumeQueued()
+        bestOf.resumeQueued()
+      }
     }
   }
 }

@@ -1,11 +1,11 @@
-import { ArrowLeft, Check, Crop, FolderOpen, Music, Pause, Play, RotateCcw, Smartphone, Monitor, X } from 'lucide-react'
+import { ArrowLeft, Check, Clapperboard, Crop, FolderOpen, Music, Pause, Play, RotateCcw, Smartphone, Monitor, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { editGroupText } from '@shared/captionEdit'
 import { clipWords, groupWords, type CaptionGroup } from '@shared/captions'
 import { CAPTION_STYLES } from '@shared/captionStyles'
 import { formatClock, formatEta, formatLength } from '@shared/format'
 import type { RenderFormat } from '@shared/layoutGeometry'
-import { AUDIO_MODE_LABELS, type AppInfo, type AudioMode, type Clip, type ExportItem, type Layout, type Range } from '@shared/types'
+import { AUDIO_MODE_LABELS, type AppInfo, type AudioMode, type BestOfItem, type Clip, type ExportItem, type Layout, type Range } from '@shared/types'
 import type { ClipPatch } from '@shared/ipc'
 import type { Route } from '../App'
 import { api, call, errorText, useEvent } from '../api'
@@ -20,6 +20,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
   const [selected, setSelected] = useState<string | null>(null)
   const [layouts, setLayouts] = useState<Layout[]>([])
   const [exports, setExports] = useState<ExportItem[]>([])
+  const [bestOf, setBestOf] = useState<BestOfItem[]>([])
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [format, setFormat] = useState<RenderFormat>('vertical')
   const [time, setTime] = useState(0)
@@ -36,6 +37,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
     })
     void call('layouts:list').then((l) => setLayouts(l.layouts))
     void call('exports:list', jobId).then(setExports)
+    void call('bestOf:list', jobId).then(setBestOf)
     void call('app:info').then(setInfo)
     void call('taste:status').then((s) => setTuned(s.tuned))
   }, [jobId])
@@ -44,6 +46,17 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
     if (item.jobId !== jobId) return
     setExports((list) => {
       const i = list.findIndex((e) => e.id === item.id)
+      if (i < 0) return [...list, item]
+      const next = [...list]
+      next[i] = item
+      return next
+    })
+  })
+
+  useEvent('bestOf:changed', (item) => {
+    if (item.jobId !== jobId) return
+    setBestOf((list) => {
+      const i = list.findIndex((b) => b.id === item.id)
       if (i < 0) return [...list, item]
       const next = [...list]
       next[i] = item
@@ -132,6 +145,8 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
 
   const kept = clips?.filter((c) => c.status === 'accepted') ?? []
   const jobExports = exports.filter((e) => e.status !== 'cancelled')
+  const activeBestOf = bestOf.find((b) => b.status === 'running' || b.status === 'queued') ?? null
+  const lastBestOf = [...bestOf].reverse().find((b) => b.status !== 'cancelled') ?? null
 
   if (!clips) {
     return (
@@ -188,6 +203,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
           >
             {kept.length ? `Export ${kept.length} kept clip${kept.length > 1 ? 's' : ''}` : 'Keep clips to export them'}
           </button>
+          <BestOfButton kept={kept.length} active={activeBestOf} last={lastBestOf} onStart={() => void call('bestOf:start', jobId).catch((e) => setError(errorText(e)))} />
           <div className="small faint" style={{ textAlign: 'center' }}>
             <kbd>K</kbd> keep · <kbd>X</kbd> skip · <kbd>Space</kbd> play
           </div>
@@ -473,6 +489,33 @@ function CaptionLine({ group, now, onSeek, onText }: { group: CaptionGroup; now:
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         spellCheck={false}
       />
+    </div>
+  )
+}
+
+function BestOfButton({ kept, active, last, onStart }: { kept: number; active: BestOfItem | null; last: BestOfItem | null; onStart: () => void }): ReactNode {
+  if (active) {
+    return (
+      <div className="col" style={{ gap: 4 }}>
+        <div className="row small faint">
+          <span className="grow">Building the best-of video...</span>
+          <span>{formatEta(active.etaSec) ?? `${Math.round(active.progress * 100)}%`}</span>
+        </div>
+        <ProgressBar value={active.progress} />
+      </div>
+    )
+  }
+  return (
+    <div className="col" style={{ gap: 4 }}>
+      <button type="button" className="btn ghost" disabled={kept === 0} onClick={onStart} title="Join the kept clips into one 16:9 video with crossfades">
+        <Clapperboard size={14} /> Best of
+      </button>
+      {last?.status === 'done' && (
+        <button type="button" className="btn sm ghost" onClick={() => void call('bestOf:show', last.id)}>
+          <FolderOpen size={12} /> Show best-of video
+        </button>
+      )}
+      {last?.status === 'failed' && <span className="small error">{last.error ?? 'The best-of video could not be built.'}</span>}
     </div>
   )
 }

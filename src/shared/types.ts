@@ -175,6 +175,20 @@ export interface ExportItem {
   createdAt: number
 }
 
+export type BestOfStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+
+/** One "best of the stream" 16:9 build: the job's kept clips joined with crossfades. */
+export interface BestOfItem {
+  id: string
+  jobId: string
+  status: BestOfStatus
+  progress: number
+  etaSec: number | null
+  file: string | null
+  error: string | null
+  createdAt: number
+}
+
 export type GpuVendor = 'nvidia' | 'amd' | 'intel' | 'other'
 
 export interface GpuInfo {

@@ -3,7 +3,7 @@
 
 import { parseChannelName } from '@shared/channelName'
 import type { CrapcutApi, EventChannel, Events, InvokeChannel } from '@shared/ipc'
-import type { AppInfo, AutostartStatus, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
+import type { AppInfo, AutostartStatus, BestOfItem, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
 
 const listeners = new Map<string, Set<(p: unknown) => void>>()
 function emit<E extends EventChannel>(e: E, p: Events[E]): void {
@@ -113,6 +113,7 @@ let clips: Clip[] = titles.map((title, i) => {
 })
 let layouts: Layout[] = []
 let exports: ExportItem[] = []
+let bestOf: BestOfItem[] = []
 let channelWatch: ChannelWatchStatus = { channel: null, enabledAt: null, checking: false, lastCheckedAt: null, lastError: null }
 let autostart: AutostartStatus = { enabled: false, userSet: false }
 
@@ -155,6 +156,25 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
     for (const e of exports) emit('exports:changed', e)
     return exports.map((e) => e.id)
   },
+  'bestOf:list': (jobId: string) => bestOf.filter((b) => b.jobId === jobId),
+  'bestOf:start': (jobId: string) => {
+    const id = `bestof-${Date.now()}`
+    const item: BestOfItem = { id, jobId, status: 'running', progress: 0.15, etaSec: 18, file: null, error: null, createdAt: Date.now() }
+    bestOf = [...bestOf.filter((b) => b.jobId !== jobId), item]
+    emit('bestOf:changed', item)
+    setTimeout(() => {
+      const done: BestOfItem = { ...item, status: 'done', progress: 1, etaSec: null, file: 'C:\\Users\\you\\Videos\\CrapCut\\Best of - preview (16x9).mp4' }
+      bestOf = bestOf.map((b) => (b.id === id ? done : b))
+      emit('bestOf:changed', done)
+    }, 2500)
+    return id
+  },
+  'bestOf:cancel': (id: string) => {
+    bestOf = bestOf.map((b) => (b.id === id ? { ...b, status: 'cancelled' as const } : b))
+    const item = bestOf.find((b) => b.id === id)
+    if (item) emit('bestOf:changed', item)
+  },
+  'bestOf:show': () => undefined,
   'taste:status': () => ({ tuned: true }),
   'taste:reset': () => undefined,
   'channelWatch:status': () => channelWatch,

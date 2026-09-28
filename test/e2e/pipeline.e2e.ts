@@ -55,6 +55,7 @@ describe.skipIf(!VOD)('end to end on a real VOD', () => {
       if (!parsed.ok) throw new Error(parsed.reason)
       const store = new Store(join(HOME, 'e2e.db'))
       const gpu = new GpuLock()
+      const encodeLock = new GpuLock()
       let last: JobSummary | null = null
       let lastLine = ''
       const runner = new JobRunner(store, paths, tools, () => hw, gpu, {
@@ -98,7 +99,7 @@ describe.skipIf(!VOD)('end to end on a real VOD', () => {
       const best = clips[0]!
       store.saveClip({ ...best, status: 'accepted', layoutId: layout.id, formats: { vertical: true, horizontal: true } })
       const done = new Map<string, ExportItem>()
-      const exporter = new Exporter(store, paths, tools, () => hw, gpu, {
+      const exporter = new Exporter(store, paths, tools, () => hw, gpu, encodeLock, {
         onChanged: (item) => {
           if (item.status === 'done' || item.status === 'failed') done.set(item.id, item)
         }

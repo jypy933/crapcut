@@ -105,7 +105,7 @@ function createWindow(): BrowserWindow {
     if (isQuitting || !services) return
     const state = {
       jobRunning: services.runner.hasWork(),
-      exportRunning: services.exporter.hasWork(),
+      exportRunning: services.exporter.hasWork() || services.bestOf.hasWork(),
       channelWatched: services.channelWatch.status().channel !== null
     }
     if (shouldHideOnClose(state)) {
@@ -184,7 +184,7 @@ app.on('will-quit', (event) => {
   s.updater.stop()
   s.channelWatch.stop()
   const timeout = new Promise((r) => setTimeout(r, 8000))
-  void Promise.race([Promise.all([s.runner.shutdown(), s.exporter.shutdown()]), timeout]).finally(() => {
+  void Promise.race([Promise.all([s.runner.shutdown(), s.exporter.shutdown(), s.bestOf.shutdown()]), timeout]).finally(() => {
     s.store.close()
     app.exit(0)
   })

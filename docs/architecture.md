@@ -11,12 +11,14 @@ renderer (sandboxed React UI)
 main process
    ├─ ipc.ts          checks sender, validates args with zod, returns results
    ├─ services.ts     wires the long-lived services
-   ├─ store.ts        SQLite (node:sqlite): jobs, steps, clips, layouts, exports
+   ├─ store.ts        SQLite (node:sqlite): jobs, steps, clips, layouts, exports, best-of
    ├─ pipeline/
-   │   ├─ runner.ts   one job at a time, step checkpoints, retries, pause/continue
-   │   ├─ steps.ts    metadata -> chat -> audio -> transcribe -> moments -> clips
-   │   ├─ exporter.ts export lane: renders kept clips one at a time
-   │   └─ gpuLock.ts  one AI model on the GPU at a time
+   │   ├─ runner.ts     one job at a time, step checkpoints, retries, pause/continue
+   │   ├─ steps.ts      metadata -> chat -> audio -> transcribe -> moments -> clips
+   │   ├─ clipRender.ts renders one clip to a file; shared by exporter.ts and bestOf.ts
+   │   ├─ exporter.ts   export lane: renders kept clips one at a time
+   │   ├─ bestOf.ts     joins the kept clips into one 16:9 "best of" video
+   │   └─ gpuLock.ts    one AI model on the GPU at a time
    ├─ tools/          pinned downloads, checksums, GPU detection, process runner
    └─ core/           pure logic, unit-tested without Electron
 ```
@@ -67,6 +69,19 @@ Section downloads can start a little off the requested time. After each clip
 download, its audio is matched against the full stream audio
 (`core/align.ts`, normalised cross-correlation of 10 ms loudness envelopes), so
 captions and cuts stay frame-accurate.
+
+### Best of the stream
+
+From Review, "Best of" joins the job's kept clips, in stream order, into one
+16:9 video for a single YouTube upload. Each kept clip is rendered fresh as
+its own 16:9 export (same captions, audio option and encoder choice as a
+normal export), then `core/bestOf.ts` builds one FFmpeg command that
+normalises every clip to 1920x1080/30fps/48kHz and joins them with a 0.5 s
+`xfade`/`acrossfade` crossfade; a single kept clip is just re-encoded with no
+crossfade. A crossfade is shortened for a short clip so it never eats more
+than 40% of either neighbour. `pipeline/bestOf.ts` runs this like a small
+export queue (progress, ETA, cancel, resume after a restart) and reuses the
+exporter's encoder choice.
 
 ## Hardware
 

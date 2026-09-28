@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Clip } from '@shared/types'
-import { Store } from './store'
+import { MIGRATIONS, Store } from './store'
 
 let dir = ''
 let store: Store
@@ -100,6 +101,21 @@ describe('Store', () => {
     expect(store.exports(id)[0]).toMatchObject({ status: 'queued', progress: 0 })
   })
 
+  it('tracks best-of builds and requeues interrupted ones', () => {
+    const id = store.createJob('u', '7')
+    const other = store.createJob('u', '8')
+    store.addBestOf(other)
+    const b = store.addBestOf(id)
+    expect(store.bestOfList(id)).toMatchObject([{ status: 'queued', progress: 0 }])
+    store.updateBestOf(b, { status: 'running', progress: 0.5 })
+    expect(store.bestOfList(id)[0]).toMatchObject({ status: 'running', progress: 0.5 })
+    store.requeueInterruptedBestOf()
+    expect(store.bestOfList(id)[0]).toMatchObject({ status: 'queued', progress: 0 })
+    expect(store.bestOfList()).toHaveLength(2)
+    store.updateBestOf(b, { status: 'done', file: 'C:\\out\\best.mp4' })
+    expect(store.bestOfList(id)[0]).toMatchObject({ status: 'done', file: 'C:\\out\\best.mp4' })
+  })
+
   it('saves layouts and settings', () => {
     store.saveLayout({ id: 'l1', name: 'Cam', kind: 'cam_game', cam: { x: 0.7, y: 0.7, w: 0.3, h: 0.3 }, game: { x: 0, y: 0, w: 1, h: 1 } })
     store.saveLayout({ id: 'l1', name: 'Cam 2', kind: 'cam_game', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } })
@@ -135,5 +151,43 @@ describe('Store', () => {
     store.close()
     store = new Store(join(dir, 'test.db'))
     expect(store.job(id)).not.toBeNull()
+  })
+})
+
+describe('schema migration', () => {
+  it('migrates a real v1 database (with existing rows) to v2 without losing data', () => {
+    // Build the database exactly as the shipped v0.1.2 app would have left
+    // it: only migration 1 applied, user_version = 1, real rows in it.
+    const file = join(dir, 'v1.db')
+    const raw = new DatabaseSync(file)
+    raw.exec(MIGRATIONS[1]!)
+    raw.exec('PRAGMA user_version = 1')
+    const now = Date.now()
+    raw.prepare('INSERT INTO jobs (id, url, vod_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('job1', 'https://www.twitch.tv/videos/1', '1', 'review', now, now)
+    raw.prepare('INSERT INTO steps (job_id, step, status) VALUES (?, ?, ?)').run('job1', 'metadata', 'done')
+    const clipData = JSON.stringify({ ...clip('job1', 1), status: 'accepted' })
+    raw.prepare('INSERT INTO clips (id, job_id, rank, data, updated_at) VALUES (?, ?, ?, ?, ?)').run('c1', 'job1', 1, clipData, now)
+    raw.prepare('INSERT INTO exports (id, job_id, clip_id, format, status, created_at) VALUES (?, ?, ?, ?, ?, ?)').run('exp1', 'job1', 'c1', 'vertical', 'done', now)
+    raw.prepare('INSERT INTO kv (key, value) VALUES (?, ?)').run('encoder', JSON.stringify({ encoder: 'libx264' }))
+    raw.close()
+
+    const migrated = new Store(file)
+    try {
+      // The pre-existing rows are all still there, untouched.
+      expect(migrated.job('job1')).toMatchObject({ id: 'job1', status: 'review' })
+      expect(migrated.clips('job1')).toHaveLength(1)
+      expect(migrated.clip('c1')).toMatchObject({ id: 'c1', status: 'accepted' })
+      expect(migrated.exports('job1')).toMatchObject([{ id: 'exp1', status: 'done' }])
+      expect(migrated.get<{ encoder: string }>('encoder')).toEqual({ encoder: 'libx264' })
+
+      // The new table from migration 2 exists and works.
+      const b = migrated.addBestOf('job1')
+      expect(migrated.bestOfList('job1')).toMatchObject([{ id: b, status: 'queued' }])
+
+      const version = (migrated.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+      expect(version).toBe(2)
+    } finally {
+      migrated.close()
+    }
   })
 })
