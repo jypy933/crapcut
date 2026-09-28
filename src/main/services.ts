@@ -2,6 +2,7 @@
 
 import { app, Notification, type BrowserWindow } from 'electron'
 import type { AppInfo, HardwareProfile, LicenceNotice } from '@shared/types'
+import { ChannelWatchService } from './channelWatch'
 import { sendEvent } from './ipc'
 import { resolvePaths, type AppPaths } from './paths'
 import { Exporter } from './pipeline/exporter'
@@ -29,6 +30,7 @@ export interface AppServices {
   runner: JobRunner
   exporter: Exporter
   updater: Updater
+  channelWatch: ChannelWatchService
   allowedLinks: ReadonlySet<string>
   appInfo: () => AppInfo
   onSetupFinished: () => void
@@ -54,7 +56,17 @@ export async function createServices(resources: string, getWindow: () => Browser
     onJobReady: (job) => {
       const win = getWindow()
       if (Notification.isSupported() && (!win || !win.isFocused())) {
-        new Notification({ title: 'Clips are ready', body: `${job.clipCount} clips from "${job.vod?.title ?? 'your VOD'}" are ready to review.`, silent: false }).show()
+        const notice = new Notification({ title: 'Clips are ready', body: `${job.clipCount} clips from "${job.vod?.title ?? 'your VOD'}" are ready to review.`, silent: false })
+        notice.on('click', () => {
+          const w = getWindow()
+          if (w) {
+            if (w.isMinimized()) w.restore()
+            w.show()
+            w.focus()
+          }
+          sendEvent(getWindow(), 'jobs:focus', { jobId: job.id })
+        })
+        notice.show()
       }
     }
   })
@@ -63,6 +75,8 @@ export async function createServices(resources: string, getWindow: () => Browser
   })
   const updater = new Updater((s) => sendEvent(getWindow(), 'app:update', s))
   setup.onChange((s) => sendEvent(getWindow(), 'setup:status', s))
+  const channelWatch = new ChannelWatchService({ store, tools, isReady: () => setup.isReady(), enqueueJob: (jobId) => runner.enqueue(jobId) })
+  channelWatch.onChange((s) => sendEvent(getWindow(), 'channelWatch:changed', s))
 
   const notices = licenceNotices()
   const allowedLinks = new Set([PROJECT_URL, `${PROJECT_URL}/releases`, ...notices.map((n) => n.url)].map((u) => new URL(u).toString()))
@@ -82,6 +96,7 @@ export async function createServices(resources: string, getWindow: () => Browser
     runner,
     exporter,
     updater,
+    channelWatch,
     allowedLinks,
     appInfo: () => ({
       version: app.getVersion(),

@@ -27,7 +27,10 @@ export const INVOKE_CHANNELS = [
   'exports:list',
   'exports:start',
   'exports:cancel',
-  'exports:show'
+  'exports:show',
+  'channelWatch:status',
+  'channelWatch:set',
+  'channelWatch:clear'
 ] as const
 
-export const EVENT_CHANNELS = ['setup:status', 'jobs:changed', 'exports:changed', 'app:update'] as const
+export const EVENT_CHANNELS = ['setup:status', 'jobs:changed', 'exports:changed', 'app:update', 'channelWatch:changed', 'jobs:focus'] as const

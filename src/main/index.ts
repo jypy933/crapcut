@@ -100,6 +100,7 @@ async function start(): Promise<void> {
   registerIpc(services, () => win, devServer)
   win = createWindow()
   services.updater.start()
+  services.channelWatch.start()
 
   app.on('activate', () => {
     if (!win) win = createWindow()
@@ -116,6 +117,7 @@ app.on('will-quit', (event) => {
   quitting = true
   const s = services
   s.updater.stop()
+  s.channelWatch.stop()
   const timeout = new Promise((r) => setTimeout(r, 8000))
   void Promise.race([Promise.all([s.runner.shutdown(), s.exporter.shutdown()]), timeout]).finally(() => {
     s.store.close()

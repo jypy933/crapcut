@@ -18,7 +18,7 @@ const log = logger('ipc')
 type Handler<C extends InvokeChannel> = (...args: never[]) => Promise<InvokeResult[C]> | InvokeResult[C]
 
 export function registerIpc(services: AppServices, getWindow: () => BrowserWindow | null, devServer: string | undefined): void {
-  const { store, runner, exporter, setup, updater, paths } = services
+  const { store, runner, exporter, setup, updater, paths, channelWatch } = services
 
   const handlers: { [C in InvokeChannel]: Handler<C> } = {
     'app:info': () => services.appInfo(),
@@ -102,7 +102,11 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
     'exports:show': (id: string) => {
       const item = exporter.list().find((e) => e.id === id)
       if (item?.file && existsSync(item.file)) shell.showItemInFolder(item.file)
-    }
+    },
+
+    'channelWatch:status': () => channelWatch.status(),
+    'channelWatch:set': (text: string) => channelWatch.set(text),
+    'channelWatch:clear': () => channelWatch.clear()
   }
 
   function requireClip(id: string): Clip {
