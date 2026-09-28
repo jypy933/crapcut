@@ -77,6 +77,23 @@ export function parseWhisperJson(json: unknown): { language: string | null; word
   return { language, words: tidyWords(words) }
 }
 
+/** Version of the per-chunk transcript files; chunks written by older versions are redone. */
+export const CHUNK_FORMAT = 2
+
+/**
+ * Moves a chunk's words (timed from the start of the chunk's own WAV) onto
+ * the VOD timeline and drops anything that falls outside the chunk.
+ */
+export function placeChunkWords(words: Word[], range: Range, slackSec = 1): { words: Word[]; dropped: number } {
+  const out: Word[] = []
+  for (const w of words) {
+    const t0 = w.t0 + range.start
+    if (t0 < range.start - slackSec || t0 > range.end + slackSec) continue
+    out.push({ ...w, t0, t1: Math.min(w.t1 + range.start, range.end + slackSec) })
+  }
+  return { words: out, dropped: words.length - out.length }
+}
+
 /** Sorts words, removes overlaps and long hallucinated repeats. */
 export function tidyWords(words: Word[]): Word[] {
   const sorted = words.map((w) => ({ ...w })).sort((a, b) => a.t0 - b.t0)

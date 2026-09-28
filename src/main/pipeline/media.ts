@@ -95,6 +95,11 @@ export async function probeMedia(ffprobe: string, file: string, signal?: AbortSi
   }
 }
 
+/** Copies [start, start+duration] of a PCM WAV into its own file (exact for PCM). Paths are relative to `cwd`. */
+export async function cutWav(ffmpeg: string, cwd: string, input: string, start: number, duration: number, output: string, signal: AbortSignal): Promise<void> {
+  await runTool(ffmpeg, ['-hide_banner', '-nostdin', '-v', 'error', '-y', '-ss', start.toFixed(3), '-t', duration.toFixed(3), '-i', input, '-c', 'copy', output], { cwd, signal })
+}
+
 /** Mono 8 kHz float PCM of [start, start+duration] of a file. */
 export async function extractPcm(ffmpeg: string, file: string, start: number, duration: number, signal?: AbortSignal): Promise<Buffer> {
   const { stdout } = await runToolBinary(ffmpeg, ['-hide_banner', '-nostdin', '-v', 'error', '-ss', start.toFixed(3), '-t', duration.toFixed(3), '-i', file, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], signal)

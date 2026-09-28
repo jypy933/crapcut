@@ -24,7 +24,7 @@ import {
 } from '../core/llmPrompt'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
 import { fallbackTitle, findCandidates, selectNonOverlapping, targetClipCount, type Candidate } from '../core/moments'
-import { mergeChunks, packWords, parseWhisperJson, planChunks, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
+import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
 import type { AppPaths } from '../paths'
 import type { Store } from '../store'
 import { nvidiaFreeVramMb } from '../tools/gpu'
@@ -33,7 +33,7 @@ import { CancelledError, UserError, isCancelled, throwIfAborted } from '../util/
 import type { Logger } from '../util/log'
 import { downloadChat, LlamaServer, whisperChunk } from './ai'
 import type { GpuLock } from './gpuLock'
-import { extractPcm, fetchMutedRanges, prepareAudio, probeMedia, silentRanges } from './media'
+import { cutWav, extractPcm, fetchMutedRanges, prepareAudio, probeMedia, silentRanges } from './media'
 import { downloadAudio, downloadSection, fetchVodMeta } from './ytdlp'
 
 export interface StepContext {
@@ -154,6 +154,16 @@ export interface TranscriptFile {
   words: PackedWord[]
 }
 
+/** A chunk counts as done only if it was written in the current format. */
+async function chunkDone(file: string): Promise<boolean> {
+  if (!existsSync(file)) return false
+  try {
+    return (await readJson<{ v?: number }>(file)).v === CHUNK_FORMAT
+  } catch {
+    return false
+  }
+}
+
 async function transcribe(ctx: StepContext): Promise<void> {
   if (transcriptDone(ctx.dir)) return
   const meta = await loadMeta(ctx.dir)
@@ -164,6 +174,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
   const outDir = join(ctx.dir, 'transcript')
   mkdirSync(outDir, { recursive: true })
 
+  const ffmpeg = ctx.tools.require('ffmpeg')
   const cuda = ctx.hw.whisper === 'cuda' ? ctx.tools.path('whisper-cuda') : null
   const cpu = ctx.tools.require('whisper-cpu')
   const large = ctx.tools.path('model-whisper-large')
@@ -192,28 +203,29 @@ async function transcribe(ctx: StepContext): Promise<void> {
     for (let i = 0; i < chunks.length; i++) {
       throwIfAborted(ctx.signal)
       const chunk = chunks[i]!
-      const done = join(outDir, `chunk-${String(i).padStart(3, '0')}.json`)
-      if (existsSync(done)) continue
+      const name = `chunk-${String(i).padStart(3, '0')}`
+      const done = join(outDir, `${name}.json`)
+      if (await chunkDone(done)) continue
       const overallBase = i / chunks.length
       const report = (f: number): void => ctx.progress(overallBase + f / chunks.length, useGpu ? null : 'Using the processor (slower)')
       report(0)
       // Skip chunks that are entirely muted.
       const mutedSec = muted.reduce((s, m) => s + Math.max(0, Math.min(chunk.end, m.end) - Math.max(chunk.start, m.start)), 0)
       if (mutedSec >= chunk.end - chunk.start - 1) {
-        await writeJsonAtomic(done, { range: chunk, words: [] })
+        await writeJsonAtomic(done, { v: CHUNK_FORMAT, range: chunk, words: [] })
         continue
       }
-      const outBase = join(outDir, `chunk-${String(i).padStart(3, '0')}.raw`)
+      const wav = join(outDir, `${name}.wav`)
+      await cutWav(ffmpeg, root, rel(join(ctx.dir, 'audio16k.wav')), chunk.start, chunk.end - chunk.start, rel(wav), ctx.signal)
+      const outBase = join(outDir, `${name}.raw`)
       const run = async (gpu: boolean): Promise<void> =>
         whisperChunk({
           whisper: gpu && cuda ? cuda : cpu,
           cwd: root,
           model: rel(modelFor(gpu)),
           vadModel: vad ? rel(vad) : null,
-          audio: rel(join(ctx.dir, 'audio16k.wav')),
+          audio: rel(wav),
           outBase: rel(outBase),
-          offsetSec: chunk.start,
-          durationSec: chunk.end - chunk.start,
           language,
           threads: gpu ? 4 : cpuThreads,
           gpu,
@@ -234,8 +246,11 @@ async function transcribe(ctx: StepContext): Promise<void> {
         language = parsed.language
         writeFileSync(langFile, language)
       }
-      await writeJsonAtomic(done, { range: chunk, words: packWords(parsed.words) })
+      const placed = placeChunkWords(parsed.words, chunk)
+      if (placed.dropped > 0) ctx.log.warn(`${name}: dropped ${placed.dropped} of ${parsed.words.length} words timed outside the chunk`)
+      await writeJsonAtomic(done, { v: CHUNK_FORMAT, range: chunk, words: packWords(placed.words) })
       rmSync(`${outBase}.json`, { force: true })
+      rmSync(wav, { force: true })
     }
   } finally {
     release()

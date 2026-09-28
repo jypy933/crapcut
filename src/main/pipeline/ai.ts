@@ -17,10 +17,9 @@ export interface WhisperChunkOptions {
   cwd: string
   model: string
   vadModel: string | null
+  /** One chunk as its own WAV. whisper.cpp's -ot/-d misplace timestamps when VAD is on. */
   audio: string
   outBase: string
-  offsetSec: number
-  durationSec: number
   language: string | null
   threads: number
   gpu: boolean
@@ -36,10 +35,6 @@ export function whisperArgs(o: Omit<WhisperChunkOptions, 'whisper' | 'cwd' | 'si
     o.model,
     '-f',
     o.audio,
-    '-ot',
-    String(Math.round(o.offsetSec * 1000)),
-    '-d',
-    String(Math.round(o.durationSec * 1000)),
     '-l',
     o.language ?? 'auto',
     '-ml',
