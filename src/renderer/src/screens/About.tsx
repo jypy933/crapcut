@@ -1,4 +1,4 @@
-import { Download, FileText, FolderOpen, RefreshCw } from 'lucide-react'
+import { Download, FileText, FolderOpen, RefreshCw, RotateCcw } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import type { AppInfo, UpdateState } from '@shared/types'
 import { call } from '../api'
@@ -25,8 +25,10 @@ function updateLine(u: UpdateState): string {
 
 export function About({ update }: { update: UpdateState }): ReactNode {
   const [info, setInfo] = useState<AppInfo | null>(null)
+  const [tuned, setTuned] = useState(false)
   useEffect(() => {
     void call('app:info').then(setInfo)
+    void call('taste:status').then((s) => setTuned(s.tuned))
   }, [])
   if (!info) return null
 
@@ -57,6 +59,14 @@ export function About({ update }: { update: UpdateState }): ReactNode {
         </button>
       </div>
       <p className="small faint">If something goes wrong, send the file crapcut.log from the log folder. It has no personal information.</p>
+
+      {tuned && (
+        <div className="row" style={{ marginTop: 22 }}>
+          <button type="button" className="btn sm ghost" onClick={() => void call('taste:reset').then(() => setTuned(false))}>
+            <RotateCcw size={13} /> Reset what CrapCut has learned from your picks
+          </button>
+        </div>
+      )}
 
       <h2 style={{ marginTop: 34 }}>Privacy</h2>
       <p className="muted small">

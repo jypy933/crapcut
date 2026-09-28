@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync }
 import { readFile, writeFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { Clip, HardwareProfile, JobSummary, Range, StepId, VodInfo, Word } from '@shared/types'
+import type { Clip, HardwareProfile, JobSummary, MomentSource, Range, StepId, VodInfo, Word } from '@shared/types'
 import { bestLag, envelope, pcm16ToFloat } from '../core/align'
 import { parseChatLog } from '../core/chat'
 import {
@@ -24,6 +24,7 @@ import {
 } from '../core/llmPrompt'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
 import { fallbackTitle, findCandidates, selectNonOverlapping, targetClipCount, type Candidate } from '../core/moments'
+import { deriveTasteAdjustments, type TasteAdjustments } from '../core/taste'
 import { mergeChunks, packWords, parseWhisperJson, planChunks, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
 import type { AppPaths } from '../paths'
 import type { Store } from '../store'
@@ -271,6 +272,12 @@ interface Pick {
   strength: number
 }
 
+/** Which signal a candidate mainly came from, for taste learning. */
+function sourceOf(cand: Candidate): MomentSource {
+  if (cand.reasons.includes('Transcript')) return 'transcript'
+  return cand.chatZ > 0 ? 'chat' : 'audio'
+}
+
 async function moments(ctx: StepContext): Promise<void> {
   const meta = await loadMeta(ctx.dir)
   const duration = meta.vod.durationSec
@@ -284,7 +291,10 @@ async function moments(ctx: StepContext): Promise<void> {
   const loudness = parseLoudnessLog(loudText, duration)
   const words = transcript.words
   const target = targetClipCount(duration)
-  const candidates = findCandidates({ durationSec: duration, messages, loudness, words, muted }, { limit: Math.min(40, target * 2) })
+  // How his past accepts/rejects and trims have nudged the defaults; identical
+  // to today's behaviour until there is real history to learn from.
+  const adjustments = deriveTasteAdjustments(ctx.store.getTasteHistory())
+  const candidates = findCandidates({ durationSec: duration, messages, loudness, words, muted }, { limit: Math.min(40, target * 2) }, adjustments)
   ctx.log.info(`${messages.length} chat messages, ${candidates.length} candidates, target ${target}`)
 
   const llm = await openLlm(ctx)
@@ -296,7 +306,7 @@ async function moments(ctx: StepContext): Promise<void> {
     // A quiet chat gives too few moments: let the model read the transcript too.
     if (llm && keptCount < target) {
       const avoid = [...muted, ...candidates.map((c) => c.window)]
-      scanned = await scanTranscript(ctx, llm, meta, words, avoid, duration)
+      scanned = await scanTranscript(ctx, llm, meta, words, avoid, duration, adjustments)
     }
   } finally {
     llm?.close()
@@ -335,7 +345,8 @@ async function moments(ctx: StepContext): Promise<void> {
     musicPath: null,
     layoutId: defaultLayoutId && ctx.store.layout(defaultLayoutId) ? defaultLayoutId : null,
     formats: { vertical: true, horizontal: false },
-    reason: p.cand.reasons.join(' · ')
+    reason: p.cand.reasons.join(' · '),
+    signals: { chatZ: p.cand.chatZ, audioZ: p.cand.audioZ, score: p.cand.score, rating: p.refined?.rating ?? null, source: sourceOf(p.cand) }
   }))
   await writeJsonAtomic(join(ctx.dir, 'moments.json'), {
     candidates,
@@ -431,9 +442,18 @@ const TRANSCRIPT_SIGNAL = 0.3
 /** Transcript moments must be rated at least this high to be kept. */
 const TRANSCRIPT_MIN_RATING = 6
 
-async function scanTranscript(ctx: StepContext, llm: LlmSession, meta: JobMeta, words: Word[], avoid: Range[], duration: number): Promise<Pick[]> {
+async function scanTranscript(
+  ctx: StepContext,
+  llm: LlmSession,
+  meta: JobMeta,
+  words: Word[],
+  avoid: Range[],
+  duration: number,
+  adjustments: TasteAdjustments
+): Promise<Pick[]> {
   const windows = scanWindows(duration, words, avoid).slice(0, 160)
   ctx.log.info(`scanning ${windows.length} transcript windows`)
+  const transcriptSignal = TRANSCRIPT_SIGNAL * adjustments.transcriptWeight
   const out: Pick[] = []
   let failures = 0
   for (let i = 0; i < windows.length; i++) {
@@ -445,13 +465,13 @@ async function scanTranscript(ctx: StepContext, llm: LlmSession, meta: JobMeta, 
     try {
       const r = parseAnswer(await ask(ctx, llm, buildScanPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, excerpt)), excerpt, duration)
       if (!r || !r.keep || r.rating < TRANSCRIPT_MIN_RATING) continue
-      const score = combinedScore(TRANSCRIPT_SIGNAL, r.rating)
+      const score = combinedScore(transcriptSignal, r.rating)
       const cand: Candidate = {
         peak: (r.window.start + r.window.end) / 2,
         event: r.window.start,
         window: r.window,
         strength: score,
-        score: TRANSCRIPT_SIGNAL,
+        score: transcriptSignal,
         chatZ: 0,
         audioZ: 0,
         reasons: ['Transcript']

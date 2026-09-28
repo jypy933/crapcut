@@ -5,6 +5,7 @@ import type { Range, Word } from '@shared/types'
 import type { ChatMessage } from './chat'
 import { overlapSeconds } from './media'
 import { chatSeries, findPeaks, maxIn, movingAverage, robustZ, type Series } from './signals'
+import { DEFAULT_TASTE_ADJUSTMENTS, type TasteAdjustments } from './taste'
 import { wordsIn } from './transcript'
 
 export interface MomentInputs {
@@ -125,8 +126,9 @@ function round2(n: number): number {
 }
 
 /** Default window: context before the moment, the streamer's reaction after. */
-export function defaultWindow(event: number, peak: number): Range {
-  return { start: event - 18, end: Math.max(event + 10, peak - CHAT_DELAY_SEC + 10) }
+export function defaultWindow(event: number, peak: number, adjustments: TasteAdjustments = DEFAULT_TASTE_ADJUSTMENTS): Range {
+  const { leadInSec, leadOutSec } = adjustments
+  return { start: event - leadInSec, end: Math.max(event + leadOutSec, peak - CHAT_DELAY_SEC + leadOutSec) }
 }
 
 export interface FindOptions {
@@ -135,7 +137,7 @@ export interface FindOptions {
 }
 
 /** All candidates, strongest first. */
-export function findCandidates(inputs: MomentInputs, opts: FindOptions): Candidate[] {
+export function findCandidates(inputs: MomentInputs, opts: FindOptions, adjustments: TasteAdjustments = DEFAULT_TASTE_ADJUSTMENTS): Candidate[] {
   const { durationSec, loudness, words, muted } = inputs
   const messages = [...inputs.messages].sort((a, b) => a.t - b.t)
   const n = Math.max(1, Math.ceil(durationSec))
@@ -153,11 +155,14 @@ export function findCandidates(inputs: MomentInputs, opts: FindOptions): Candida
   const raw: Candidate[] = []
   const add = (peak: number, onset: number, strength: number, cz: number, az: number, reasons: string[]): void => {
     const event = Math.max(0, onset - (cz > 0 ? CHAT_DELAY_SEC : 1))
-    const window = snapWindow(words, defaultWindow(event, cz > 0 ? peak : peak + CHAT_DELAY_SEC), durationSec)
+    const window = snapWindow(words, defaultWindow(event, cz > 0 ? peak : peak + CHAT_DELAY_SEC, adjustments), durationSec)
     raw.push({ peak, event, window, strength, score: strengthToScore(strength), chatZ: cz, audioZ: az, reasons })
   }
 
   // Start strict; relax when a quiet or short stream gives too few moments.
+  // (Detection thresholds are never adjusted by taste, only how candidates
+  // that pass them are ranked, so learning can't make the finder pick
+  // nothing or everything.)
   let chatPeaks = findPeaks(chatZ, 2.5, 45)
   for (const minZ of [2, 1.6]) {
     if (chatPeaks.filter((p) => inside(p.t)).length >= opts.limit / 2) break
@@ -169,14 +174,14 @@ export function findCandidates(inputs: MomentInputs, opts: FindOptions): Candida
     const az = Math.max(0, maxIn(audioZ, p.onset - CHAT_DELAY_SEC - 15, p.t - CHAT_DELAY_SEC + 5))
     const reasons = ['Chat spike', ...reasonsFor(messages, p.onset - 1, p.t + 4)]
     if (az >= 2.5) reasons.push('loud')
-    add(p.t, p.onset, p.z + 0.5 * Math.min(az, 6), p.z, az, reasons)
+    add(p.t, p.onset, adjustments.chatWeight * p.z + 0.5 * adjustments.audioWeight * Math.min(az, 6), p.z, az, reasons)
   }
 
   // Loud moments chat did not react to (useful for small chats).
   for (const p of findPeaks(audioZ, 3, 60)) {
     if (!inside(p.t)) continue
     if (raw.some((c) => Math.abs(c.event - p.t) < 30)) continue
-    add(p.t, p.onset, 0.6 * p.z, 0, p.z, ['Loud moment'])
+    add(p.t, p.onset, 0.6 * adjustments.audioWeight * p.z, 0, p.z, ['Loud moment'])
   }
 
   return selectNonOverlapping(

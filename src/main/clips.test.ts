@@ -20,7 +20,8 @@ const clip: Clip = {
   musicPath: null,
   layoutId: null,
   formats: { vertical: true, horizontal: false },
-  reason: 'Chat spike'
+  reason: 'Chat spike',
+  signals: { chatZ: 3, audioZ: 0.5, score: 0.6, rating: null, source: 'chat' }
 }
 
 const apply = (patch: object): Clip => applyClipPatch(clip, ClipPatchSchema.parse(patch), (id) => id === 'layout-1', 5000)

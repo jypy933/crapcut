@@ -25,6 +25,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
   const [playing, setPlaying] = useState(false)
   const [editingLayout, setEditingLayout] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tuned, setTuned] = useState(false)
   const video = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
@@ -35,6 +36,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
     void call('layouts:list').then((l) => setLayouts(l.layouts))
     void call('exports:list', jobId).then(setExports)
     void call('app:info').then(setInfo)
+    void call('taste:status').then((s) => setTuned(s.tuned))
   }, [jobId])
 
   useEvent('exports:changed', (item) => {
@@ -147,7 +149,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
           </button>
           <div className="grow">
             <div style={{ fontWeight: 600 }}>{clips.length} {clips.length === 1 ? 'clip' : 'clips'}</div>
-            <div className="small faint">{kept.length} kept</div>
+            <div className="small faint">{kept.length} kept{tuned ? ' · Tuned to your picks' : ''}</div>
           </div>
         </div>
         <div className="items">
