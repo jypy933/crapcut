@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeChunks, packWords, parseWhisperJson, planChunks, unpackWords, wordsIn } from './transcript'
+import { mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, unpackWords, wordsIn } from './transcript'
 
 describe('planChunks', () => {
   it('covers the whole duration without gaps', () => {
@@ -85,5 +85,26 @@ describe('word helpers', () => {
   })
   it('packs and unpacks', () => {
     expect(unpackWords(packWords(words))).toEqual(words)
+  })
+})
+
+describe('placeChunkWords', () => {
+  const range = { start: 1200, end: 1800 }
+
+  it('moves chunk-relative times onto the VOD timeline', () => {
+    const r = placeChunkWords([{ t0: 0.5, t1: 0.9, text: 'hi' }, { t0: 599, t1: 599.4, text: 'bye' }], range)
+    expect(r.words).toEqual([{ t0: 1200.5, t1: 1200.9, text: 'hi' }, { t0: 1799, t1: 1799.4, text: 'bye' }])
+    expect(r.dropped).toBe(0)
+  })
+
+  it('drops words timed outside the chunk', () => {
+    const r = placeChunkWords([{ t0: 10, t1: 11, text: 'ok' }, { t0: 2768, t1: 2769, text: 'lost' }], range)
+    expect(r.words.map((w) => w.text)).toEqual(['ok'])
+    expect(r.dropped).toBe(1)
+  })
+
+  it('keeps a word that runs just past the end, clipped', () => {
+    const r = placeChunkWords([{ t0: 599.8, t1: 603, text: 'end' }], range)
+    expect(r.words[0]!.t1).toBe(1801)
   })
 })
