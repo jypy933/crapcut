@@ -55,9 +55,11 @@ is already on disk and carries on.
 ### Captions and layout
 
 `shared/captions.ts` groups words into short on-screen chunks; the review
-preview and the export use the same code. `core/ass.ts` writes an ASS file
-with one event per word (the spoken word is highlighted). `shared/layoutGeometry.ts`
-computes the facecam/game crops for both the canvas preview and FFmpeg.
+preview and the export use the same code. `shared/captionStyles.ts` holds the
+caption look presets (clean, bold pop, boxed, minimal); `core/ass.ts` writes
+an ASS file with one event per word (the spoken word, and with some presets
+shouted/number words, are highlighted). `shared/layoutGeometry.ts` computes
+the facecam/game crops for both the canvas preview and FFmpeg.
 
 ### Clip timing
 
