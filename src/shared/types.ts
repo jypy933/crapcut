@@ -79,6 +79,20 @@ export interface JobSummary {
 
 export type ClipStatus = 'pending' | 'accepted' | 'rejected'
 
+/** Which signal a moment came from, for taste learning. */
+export type MomentSource = 'chat' | 'audio' | 'transcript'
+
+/** The signal features behind a proposed moment, kept so later decisions can be learned from. */
+export interface MomentSignals {
+  chatZ: number
+  audioZ: number
+  /** 0..1 combined signal strength, before any LLM rating. */
+  score: number
+  /** LLM rating 1..10, or null when the LLM did not see this candidate. */
+  rating: number | null
+  source: MomentSource
+}
+
 export const AUDIO_MODES = ['original', 'voice', 'voice_game', 'voice_music'] as const
 export type AudioMode = (typeof AUDIO_MODES)[number]
 
@@ -126,6 +140,8 @@ export interface Clip {
   formats: ClipFormats
   /** Why it was picked, short, e.g. "Chat spike · laughter". */
   reason: string
+  /** The signal features behind this moment; null for clips saved before this existed. */
+  signals: MomentSignals | null
 }
 
 export type LayoutKind = 'cam_game' | 'blur_fill' | 'center_crop'
