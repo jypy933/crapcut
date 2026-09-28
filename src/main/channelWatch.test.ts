@@ -21,19 +21,27 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-function playlist(entries: { id: string; title?: string; timestamp?: number; is_live?: boolean }[]): string {
-  return JSON.stringify({ entries })
+// What the pinned yt-dlp's flat-playlist listing actually returns: id with a
+// "v" prefix and duration only, nothing else.
+function playlist(ids: string[]): string {
+  return JSON.stringify({ entries: ids.map((id) => ({ id: `v${id}`, title: `Stream ${id}`, duration: 100 })) })
 }
 
-function service(opts: { fetchVideos?: ReturnType<typeof vi.fn>; isReady?: () => boolean; enqueueJob?: ReturnType<typeof vi.fn> } = {}): {
+function service(opts: { fetchVideos?: ReturnType<typeof vi.fn>; fetchIsLive?: ReturnType<typeof vi.fn>; isReady?: () => boolean; enqueueJob?: ReturnType<typeof vi.fn> } = {}): {
   svc: ChannelWatchService
   enqueueJob: ReturnType<typeof vi.fn>
   fetchVideos: ReturnType<typeof vi.fn>
+  fetchIsLive: ReturnType<typeof vi.fn>
 } {
   const enqueueJob = opts.enqueueJob ?? vi.fn()
   const fetchVideos = opts.fetchVideos ?? vi.fn().mockResolvedValue(playlist([]))
-  const svc = new ChannelWatchService({ store, tools, isReady: opts.isReady ?? (() => true), enqueueJob: enqueueJob as (jobId: string) => void }, fetchVideos as never)
-  return { svc, enqueueJob, fetchVideos }
+  const fetchIsLive = opts.fetchIsLive ?? vi.fn().mockResolvedValue(false)
+  const svc = new ChannelWatchService(
+    { store, tools, isReady: opts.isReady ?? (() => true), enqueueJob: enqueueJob as (jobId: string) => void },
+    fetchVideos as never,
+    fetchIsLive as never
+  )
+  return { svc, enqueueJob, fetchVideos, fetchIsLive }
 }
 
 describe('ChannelWatchService', () => {
@@ -75,43 +83,83 @@ describe('ChannelWatchService', () => {
   it('does nothing while setup is not ready', async () => {
     const { svc, fetchVideos } = service({ isReady: () => false })
     svc.set('streamer')
-    fetchVideos.mockClear()
     await svc.check()
     expect(fetchVideos).not.toHaveBeenCalled()
   })
 
-  it('queues a VOD published after the watch started', async () => {
-    const fetchVideos = vi.fn().mockResolvedValue(playlist([{ id: '999', title: 'New stream', timestamp: Math.round((Date.now() + 60_000) / 1000) }]))
+  it('establishes a baseline on the first check and queues nothing yet (no back-fill)', async () => {
+    const fetchVideos = vi.fn().mockResolvedValue(playlist(['100', '99', '98']))
+    const { svc, enqueueJob, fetchIsLive } = service({ fetchVideos })
+    svc.set('streamer')
+    await svc.check()
+    expect(enqueueJob).not.toHaveBeenCalled()
+    expect(fetchIsLive).not.toHaveBeenCalled()
+    // The same listing again should still queue nothing: nothing is newer
+    // than the baseline that was just recorded.
+    await svc.check()
+    expect(enqueueJob).not.toHaveBeenCalled()
+  })
+
+  it('waits for a VOD before picking a baseline when the channel has none yet', async () => {
+    const fetchVideos = vi.fn().mockResolvedValueOnce(playlist([])).mockResolvedValueOnce(playlist(['100']))
     const { svc, enqueueJob } = service({ fetchVideos })
     svc.set('streamer')
     await svc.check()
+    expect(enqueueJob).not.toHaveBeenCalled()
+    // First VOD ever seen becomes the baseline, not queued.
+    await svc.check()
+    expect(enqueueJob).not.toHaveBeenCalled()
+  })
+
+  it('queues a VOD with a greater id than the baseline', async () => {
+    const fetchVideos = vi.fn().mockResolvedValueOnce(playlist(['100'])).mockResolvedValueOnce(playlist(['101', '100']))
+    const { svc, enqueueJob } = service({ fetchVideos, fetchIsLive: vi.fn().mockResolvedValue(false) })
+    svc.set('streamer')
+    await svc.check() // baseline = 100
+    await svc.check() // 101 is new
     expect(enqueueJob).toHaveBeenCalledTimes(1)
-    expect(store.findActiveJobForVod('999')).not.toBeNull()
+    expect(store.findActiveJobForVod('101')).not.toBeNull()
   })
 
-  it('never queues a VOD older than when the watch started', async () => {
-    const fetchVideos = vi.fn().mockResolvedValue(playlist([{ id: '111', title: 'Old stream', timestamp: Math.round((Date.now() - 60_000) / 1000) }]))
+  it('never queues a VOD at or below the baseline', async () => {
+    const fetchVideos = vi.fn().mockResolvedValue(playlist(['100', '99']))
     const { svc, enqueueJob } = service({ fetchVideos })
     svc.set('streamer')
-    await svc.check()
+    await svc.check() // baseline = 100
+    await svc.check() // nothing newer than 100
     expect(enqueueJob).not.toHaveBeenCalled()
   })
 
-  it('skips a live VOD', async () => {
-    const fetchVideos = vi.fn().mockResolvedValue(playlist([{ id: '222', title: 'Live', timestamp: Math.round((Date.now() + 60_000) / 1000), is_live: true }]))
-    const { svc, enqueueJob } = service({ fetchVideos })
+  it('holds back the newest VOD while the channel is live, then queues it once offline', async () => {
+    const fetchVideos = vi.fn().mockResolvedValueOnce(playlist(['100'])).mockResolvedValue(playlist(['101', '100']))
+    const fetchIsLive = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    const { svc, enqueueJob } = service({ fetchVideos, fetchIsLive })
+    svc.set('streamer')
+    await svc.check() // baseline = 100
+    await svc.check() // 101 exists but the channel is live: held back
+    expect(enqueueJob).not.toHaveBeenCalled()
+    await svc.check() // channel offline now: 101 is queued
+    expect(enqueueJob).toHaveBeenCalledTimes(1)
+    expect(store.findActiveJobForVod('101')).not.toBeNull()
+  })
+
+  it('does not check whether the channel is live when there is nothing new', async () => {
+    const fetchVideos = vi.fn().mockResolvedValue(playlist(['100']))
+    const { svc, fetchIsLive } = service({ fetchVideos })
     svc.set('streamer')
     await svc.check()
-    expect(enqueueJob).not.toHaveBeenCalled()
+    fetchIsLive.mockClear()
+    await svc.check()
+    expect(fetchIsLive).not.toHaveBeenCalled()
   })
 
   it('does not queue the same VOD twice across checks', async () => {
-    const future = Math.round((Date.now() + 60_000) / 1000)
-    const fetchVideos = vi.fn().mockResolvedValue(playlist([{ id: '333', title: 'New', timestamp: future }]))
-    const { svc, enqueueJob } = service({ fetchVideos })
+    const fetchVideos = vi.fn().mockResolvedValueOnce(playlist(['100'])).mockResolvedValue(playlist(['101', '100']))
+    const { svc, enqueueJob } = service({ fetchVideos, fetchIsLive: vi.fn().mockResolvedValue(false) })
     svc.set('streamer')
-    await svc.check()
-    await svc.check()
+    await svc.check() // baseline = 100
+    await svc.check() // queues 101
+    await svc.check() // 101 already has a job
     expect(enqueueJob).toHaveBeenCalledTimes(1)
   })
 
@@ -135,7 +183,10 @@ describe('ChannelWatchService', () => {
 
   it('ignores an overlapping check', async () => {
     let resolveFirst: (v: string) => void = () => {}
-    const fetchVideos = vi.fn().mockReturnValueOnce(new Promise<string>((r) => (resolveFirst = r))).mockResolvedValue(playlist([]))
+    const fetchVideos = vi
+      .fn()
+      .mockReturnValueOnce(new Promise<string>((r) => (resolveFirst = r)))
+      .mockResolvedValue(playlist([]))
     const { svc } = service({ fetchVideos })
     svc.set('streamer')
     fetchVideos.mockClear()

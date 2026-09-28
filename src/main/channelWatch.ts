@@ -5,8 +5,8 @@
 
 import { parseChannelName } from '@shared/channelName'
 import type { ChannelWatch, ChannelWatchStatus } from '@shared/types'
-import { parseChannelVideos, selectNewVods } from './core/channelVideos'
-import { fetchChannelVideos } from './pipeline/ytdlp'
+import { newestVodId, parseChannelVideos, selectNewVods, withoutNewest } from './core/channelVideos'
+import { fetchChannelIsLive, fetchChannelVideos } from './pipeline/ytdlp'
 import type { Store } from './store'
 import type { ToolRegistry } from './tools/registry'
 import { isCancelled, userMessage } from './util/errors'
@@ -37,8 +37,9 @@ export class ChannelWatchService {
 
   constructor(
     private readonly deps: ChannelWatchDeps,
-    /** Overridable in tests; defaults to the real yt-dlp call. */
-    private readonly fetchVideos: typeof fetchChannelVideos = fetchChannelVideos
+    /** Overridable in tests; defaults to the real yt-dlp calls. */
+    private readonly fetchVideos: typeof fetchChannelVideos = fetchChannelVideos,
+    private readonly fetchIsLive: typeof fetchChannelIsLive = fetchChannelIsLive
   ) {}
 
   onChange(fn: (s: ChannelWatchStatus) => void): () => void {
@@ -66,13 +67,14 @@ export class ChannelWatchService {
   set(input: string): { ok: true; channel: string } | { ok: false; reason: string } {
     const parsed = parseChannelName(input)
     if (!parsed.ok) return { ok: false, reason: parsed.reason }
-    const watch: ChannelWatch = { channel: parsed.channel, enabledAt: Date.now() }
+    // No baseline yet: the next successful check records the newest VOD id
+    // it sees as the baseline and queues nothing, so history is never
+    // back-filled, then later checks queue anything newer than that.
+    const watch: ChannelWatch = { channel: parsed.channel, enabledAt: Date.now(), baselineId: null }
     this.deps.store.set(KV_KEY, watch)
     this.lastError = null
     this.lastCheckedAt = null
     this.emit()
-    // Nothing can be "new" at this exact instant; the schedule picks up
-    // anything published from here on, starting with the next check.
     return { ok: true, channel: parsed.channel }
   }
 
@@ -115,11 +117,24 @@ export class ChannelWatchService {
     try {
       const json = await this.fetchVideos(ytdlp, watch.channel, this.controller.signal)
       const vods = parseChannelVideos(json)
-      const fresh = selectNewVods(vods, watch.enabledAt, (vodId) => !!this.deps.store.findActiveJobForVod(vodId))
-      for (const v of fresh) {
-        const jobId = this.deps.store.createJob(`https://www.twitch.tv/videos/${v.id}`, v.id)
-        this.deps.enqueueJob(jobId)
-        log.info(`queued ${watch.channel} VOD ${v.id} from the watch`)
+
+      if (watch.baselineId === null) {
+        // First successful check since the watch was turned on (or since it
+        // was set, if the very first attempt failed): nothing is "new" yet,
+        // this just anchors the point history is never back-filled past.
+        this.deps.store.set(KV_KEY, { ...watch, baselineId: newestVodId(vods) })
+      } else {
+        let fresh = selectNewVods(vods, watch.baselineId, (vodId) => !!this.deps.store.findActiveJobForVod(vodId))
+        if (fresh.length > 0 && (await this.fetchIsLive(ytdlp, watch.channel, this.controller.signal))) {
+          // The channel is live: its newest archive entry is the in-progress
+          // stream, still growing. Hold it back until it is no longer live.
+          fresh = withoutNewest(fresh)
+        }
+        for (const v of fresh) {
+          const jobId = this.deps.store.createJob(`https://www.twitch.tv/videos/${v.id}`, v.id)
+          this.deps.enqueueJob(jobId)
+          log.info(`queued ${watch.channel} VOD ${v.id} from the watch`)
+        }
       }
       this.lastError = null
     } catch (err) {

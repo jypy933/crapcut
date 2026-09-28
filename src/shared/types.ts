@@ -218,8 +218,14 @@ export interface AppInfo {
 /** The one channel CrapCut watches for new VODs. */
 export interface ChannelWatch {
   channel: string
-  /** Epoch ms; only VODs published after this are queued. */
+  /** Epoch ms the watch was turned on, for display only. */
   enabledAt: number
+  /**
+   * The newest VOD id seen the first time a check succeeded after the watch
+   * was turned on. Twitch VOD ids only ever increase, so anything with a
+   * greater id is new. Null until that first check has run.
+   */
+  baselineId: string | null
 }
 
 export interface ChannelWatchStatus {
