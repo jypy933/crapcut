@@ -653,9 +653,7 @@ kbd {
   right: 6%;
   transform: translateY(-50%);
   text-align: center;
-  font-family: 'Caption', 'Segoe UI', sans-serif;
   font-weight: 900;
-  color: white;
   paint-order: stroke fill;
   -webkit-text-stroke-color: black;
   line-height: 1.15;
@@ -663,8 +661,28 @@ kbd {
   text-shadow: 0 0.06em 0.12em rgba(0, 0, 0, 0.55);
   word-break: break-word;
 }
-.frame .cap .hl {
-  color: #ffd400;
+.frame .cap.boxed {
+  display: inline-block;
+  left: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+  max-width: 88%;
+  background: rgba(0, 0, 0, 0.81);
+  padding: 0.18em 0.4em;
+  border-radius: 6px;
+  text-shadow: none;
+}
+.frame .cap .pop {
+  display: inline-block;
+  animation: cap-pop 90ms ease-out;
+}
+@keyframes cap-pop {
+  from {
+    transform: scale(0.88);
+  }
+  to {
+    transform: scale(1);
+  }
 }
 .frame .cap-guide {
   position: absolute;

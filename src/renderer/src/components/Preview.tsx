@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { captionAt, clipWords, displayText, groupWords } from '@shared/captions'
+import { captionAt, clipWords, displayText, groupWords, isKeywordWord } from '@shared/captions'
+import { captionStyle } from '@shared/captionStyles'
 import type { RenderFormat } from '@shared/layoutGeometry'
 import type { Clip, Layout } from '@shared/types'
 import { drawFrame } from '../lib/compose'
@@ -110,9 +111,10 @@ export function Preview({ clip, src, layout, format, videoRef, time, onTime, onP
 
   const groups = useMemo(() => groupWords(clipWords(clip.words, clip.start, clip.end)), [clip.words, clip.start, clip.end])
   const now = captionAt(groups, time - clip.start)
+  const style = useMemo(() => captionStyle(clip.captions.styleId), [clip.captions.styleId])
   const y = dragY ?? (format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1)))
   const fontPx = size.h * (format === 'vertical' ? 88 / 1920 : 72 / 1080)
-  const strokePx = size.h * (format === 'vertical' ? (7 * 2) / 1920 : (6 * 2) / 1080)
+  const strokePx = style.box ? 0 : size.h * (format === 'vertical' ? (7 * 2) / 1920 : (6 * 2) / 1080) * style.outlineScale
 
   function startDrag(e: React.PointerEvent): void {
     if (format !== 'vertical') return
@@ -144,17 +146,32 @@ export function Preview({ clip, src, layout, format, videoRef, time, onTime, onP
         {dragY !== null && <div className="cap-guide" style={{ top: `${dragY * 100}%` }} />}
         {clip.captions.enabled && now && (
           <div
-            className="cap"
-            style={{ top: `${y * 100}%`, fontSize: fontPx, WebkitTextStrokeWidth: strokePx, cursor: format === 'vertical' ? 'ns-resize' : 'default' }}
+            className={`cap${style.box ? ' boxed' : ''}`}
+            style={{
+              top: `${y * 100}%`,
+              fontSize: fontPx,
+              fontFamily: style.cssFontFamily,
+              color: style.textColor,
+              WebkitTextStrokeWidth: strokePx,
+              cursor: format === 'vertical' ? 'ns-resize' : 'default'
+            }}
             onPointerDown={startDrag}
             title={format === 'vertical' ? 'Drag to move the captions' : undefined}
           >
-            {now.group.words.map((w, i) => (
-              <span key={`${w.t0}-${i}`} className={i === now.active ? 'hl' : undefined}>
-                {displayText(w.text, clip.captions.uppercase)}
-                {i < now.group.words.length - 1 ? ' ' : ''}
-              </span>
-            ))}
+            {now.group.words.map((w, i) => {
+              const active = i === now.active
+              const emphasised = active || (style.emphasizeKeywords && isKeywordWord(w.text))
+              return (
+                <span
+                  key={`${w.t0}-${i}`}
+                  className={active && style.pop ? 'pop' : undefined}
+                  style={emphasised ? { color: style.highlightColor } : undefined}
+                >
+                  {displayText(w.text, clip.captions.uppercase)}
+                  {i < now.group.words.length - 1 ? ' ' : ''}
+                </span>
+              )
+            })}
           </div>
         )}
       </div>

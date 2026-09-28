@@ -2,6 +2,7 @@ import { ArrowLeft, Check, Crop, FolderOpen, Music, Pause, Play, RotateCcw, Smar
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { editGroupText } from '@shared/captionEdit'
 import { clipWords, groupWords, type CaptionGroup } from '@shared/captions'
+import { CAPTION_STYLES } from '@shared/captionStyles'
 import { formatClock, formatEta, formatLength } from '@shared/format'
 import type { RenderFormat } from '@shared/layoutGeometry'
 import { AUDIO_MODE_LABELS, type AppInfo, type AudioMode, type Clip, type ExportItem, type Layout, type Range } from '@shared/types'
@@ -373,6 +374,18 @@ function Inspector({
       >
         {clip.captions.enabled && (
           <>
+            <select
+              className="input"
+              aria-label="Caption style"
+              value={clip.captions.styleId}
+              onChange={(e) => onUpdate({ captions: { ...clip.captions, styleId: e.target.value as Clip['captions']['styleId'] } })}
+            >
+              {CAPTION_STYLES.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
             <label className="row small muted">
               <Toggle on={clip.captions.uppercase} label="Uppercase" onChange={(uppercase) => onUpdate({ captions: { ...clip.captions, uppercase } })} />
               UPPERCASE
