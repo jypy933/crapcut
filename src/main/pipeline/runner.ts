@@ -37,7 +37,13 @@ export class JobRunner {
     private readonly hw: () => HardwareProfile,
     private readonly gpu: GpuLock,
     private readonly events: RunnerEvents,
-    private readonly options: { llmModelOverride?: string } = {}
+    private readonly options: {
+      llmModelOverride?: string
+      /** Tests only: replacement step functions. */
+      steps?: Partial<Record<StepId, (ctx: StepContext) => Promise<void>>>
+      /** First automatic retry delay; doubles each time. */
+      retryDelayMs?: number
+    } = {}
   ) {}
 
   private emit(id: string, force = false): void {
@@ -179,7 +185,7 @@ export class JobRunner {
       }
       try {
         const started = Date.now()
-        await STEPS[step](ctx)
+        await (this.options.steps?.[step] ?? STEPS[step])(ctx)
         this.store.setStep(id, step, { status: 'done', progress: 1, etaSec: null, detail: null })
         log.info(`${id.slice(0, 8)} ${step} done in ${Math.round((Date.now() - started) / 1000)} s`)
         this.emit(id, true)
@@ -197,7 +203,7 @@ export class JobRunner {
           log.warn(`${id.slice(0, 8)} ${step} failed (attempt ${attempt + 1}), retrying`, err)
           this.store.setStep(id, step, { detail: 'Connection problem, retrying…' })
           this.emit(id, true)
-          const wait = 5000 * 2 ** attempt
+          const wait = (this.options.retryDelayMs ?? 5000) * 2 ** attempt
           // Wait, but wake up at once if the user pauses (the next attempt then stops cleanly).
           await new Promise<void>((resolve) => {
             const t = setTimeout(resolve, wait)
