@@ -68,6 +68,11 @@ export class Exporter {
     return this.store.exports(jobId).map((e) => ({ ...e, ...(this.progress.get(e.id) ?? {}) }))
   }
 
+  /** True while any export is running or queued (closing the window should not interrupt it). */
+  hasWork(): boolean {
+    return this.active !== null || this.queue.length > 0
+  }
+
   private emit(id: string, force = false): void {
     const now = Date.now()
     if (!force && now - this.lastEmit < 250) return

@@ -1,8 +1,8 @@
 import { Download, FileText, FolderOpen, RefreshCw, RotateCcw } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
-import type { AppInfo, UpdateState } from '@shared/types'
+import type { AppInfo, AutostartStatus, UpdateState } from '@shared/types'
 import { call } from '../api'
-import { Spinner } from '../components/ui'
+import { Spinner, Toggle } from '../components/ui'
 
 function updateLine(u: UpdateState): string {
   switch (u.kind) {
@@ -26,9 +26,11 @@ function updateLine(u: UpdateState): string {
 export function About({ update }: { update: UpdateState }): ReactNode {
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [tuned, setTuned] = useState(false)
+  const [autostart, setAutostart] = useState<AutostartStatus | null>(null)
   useEffect(() => {
     void call('app:info').then(setInfo)
     void call('taste:status').then((s) => setTuned(s.tuned))
+    void call('settings:getAutostart').then(setAutostart)
   }, [])
   if (!info) return null
 
@@ -59,6 +61,20 @@ export function About({ update }: { update: UpdateState }): ReactNode {
         </button>
       </div>
       <p className="small faint">If something goes wrong, send the file crapcut.log from the log folder. It has no personal information.</p>
+
+      {autostart && (
+        <label className="row small" style={{ marginTop: 18 }}>
+          <Toggle
+            on={autostart.enabled}
+            label="Start with Windows"
+            onChange={(enabled) => {
+              setAutostart(autostart && { ...autostart, enabled })
+              void call('settings:setAutostart', enabled).then(setAutostart)
+            }}
+          />
+          Start with Windows
+        </label>
+      )}
 
       {tuned && (
         <div className="row" style={{ marginTop: 22 }}>

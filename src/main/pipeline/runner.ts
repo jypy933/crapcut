@@ -58,6 +58,11 @@ export class JobRunner {
     return this.active?.id === id || this.queue.includes(id)
   }
 
+  /** True while any job is running or waiting to run (closing the window should not interrupt it). */
+  hasWork(): boolean {
+    return this.active !== null || this.queue.length > 0
+  }
+
   enqueue(id: string): void {
     if (this.isActive(id)) return
     const job = this.store.job(id)

@@ -77,6 +77,19 @@ to the CPU automatically. llama.cpp uses its Vulkan build (works on NVIDIA and
 AMD, CPU fallback included). Video encoding tries NVENC / AMF / QSV with a
 one-second test encode and falls back to libx264.
 
+## Tray and autostart
+
+CrapCut keeps a single `Tray` icon for its whole run (`main/tray.ts`), with an
+Open/Quit menu; clicking the icon opens the window. Closing the window hides
+it to the tray instead of quitting while a job or export is running, or a
+channel is watched (`main/core/trayPolicy.ts`, pure and unit-tested); only the
+tray's Quit item sets a flag that lets a real quit through. "Start CrapCut
+with Windows" (`main/autostart.ts`, `app.setLoginItemSettings`) defaults to on
+only while a channel is watched, unless the user has explicitly chosen
+(`main/core/autostart.ts`, also pure); the setting is exposed to the UI as a
+single toggle on the About screen. When started at login the app is launched
+with `--hidden` and comes up in the tray without showing its window.
+
 ## Security
 
 - `contextIsolation`, `sandbox`, no `nodeIntegration`, strict CSP, UI served

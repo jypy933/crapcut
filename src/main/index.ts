@@ -2,17 +2,21 @@
 
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, Menu, dialog } from 'electron'
+import { app, BrowserWindow, Menu, dialog, type Tray } from 'electron'
+import { shouldHideOnClose } from './core/trayPolicy'
 import { registerIpc } from './ipc'
 import { handleProtocols, registerSchemes } from './protocols'
 import { hardenApp, hardenSession } from './security'
 import { createServices, type AppServices } from './services'
+import { createTray } from './tray'
 import { initLog, logger } from './util/log'
 import { resolvePaths } from './paths'
 
 const devServer = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const appDir = app.getAppPath()
 const resources = app.isPackaged ? join(process.resourcesPath, 'resources') : join(appDir, 'resources')
+// Set by the "start with Windows" login item so the app comes up quietly in the tray.
+const startedHidden = process.argv.includes('--hidden')
 
 app.setAppUserModelId('io.github.jypy933.crapcut')
 registerSchemes()
@@ -20,16 +24,37 @@ hardenApp(devServer)
 
 let win: BrowserWindow | null = null
 let services: AppServices | null = null
+let tray: Tray | null = null
+// True once a real quit is underway (tray Quit, an update installing, Windows
+// signing the user out, ...); everywhere else, closing the window hides it
+// instead. Set from 'before-quit' so it covers every way a quit can start,
+// not just the tray menu.
+let isQuitting = false
+
+/** Brings the (possibly hidden or minimized) window to the front. */
+function showWindow(): void {
+  if (!win) {
+    win = createWindow()
+    return
+  }
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+const TRAY_HINT_SHOWN_KEY = 'trayHintShown'
+
+/** The first time the window hides to the tray, a short balloon explains where it went. */
+function showTrayHintOnce(s: AppServices): void {
+  if (!tray || s.store.get<boolean>(TRAY_HINT_SHOWN_KEY)) return
+  s.store.set(TRAY_HINT_SHOWN_KEY, true)
+  tray.displayBalloon({ title: 'CrapCut', content: 'CrapCut is still running here.', iconType: 'none' })
+}
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (win) {
-      if (win.isMinimized()) win.restore()
-      win.focus()
-    }
-  })
+  app.on('second-instance', () => showWindow())
   void app.whenReady().then(start)
 }
 
@@ -56,7 +81,10 @@ function createWindow(): BrowserWindow {
       devTools: !app.isPackaged
     }
   })
-  w.once('ready-to-show', () => w.show())
+  // Launched by the "start with Windows" login item: come up quietly in the tray.
+  w.once('ready-to-show', () => {
+    if (!startedHidden) w.show()
+  })
   // Development only: save a screenshot of the window (used to check the UI from scripts).
   const capture = !app.isPackaged ? process.env.CRAPCUT_DEV_CAPTURE : undefined
   if (capture) {
@@ -69,6 +97,31 @@ function createWindow(): BrowserWindow {
       }, Number(process.env.CRAPCUT_DEV_CAPTURE_DELAY ?? 4000))
     })
   }
+  // A job, an export or a watched channel still needs the app: hide to the
+  // tray instead of quitting. A real quit (tray Quit, an update installing,
+  // an app menu quit, ...) sets isQuitting first, via 'before-quit', and is
+  // let through untouched.
+  w.on('close', (event) => {
+    if (isQuitting || !services) return
+    const state = {
+      jobRunning: services.runner.hasWork(),
+      exportRunning: services.exporter.hasWork(),
+      channelWatched: services.channelWatch.status().channel !== null
+    }
+    if (shouldHideOnClose(state)) {
+      event.preventDefault()
+      w.hide()
+      showTrayHintOnce(services)
+    }
+  })
+  // Windows is ending the session (shutdown, restart or sign-out): let the
+  // window close for real instead of hiding it, so the OS is not held up.
+  w.on('query-session-end', () => {
+    isQuitting = true
+  })
+  w.on('session-end', () => {
+    isQuitting = true
+  })
   w.on('closed', () => {
     win = null
   })
@@ -99,13 +152,23 @@ async function start(): Promise<void> {
   }
   registerIpc(services, () => win, devServer)
   win = createWindow()
+  tray = createTray(resources, () => showWindow(), () => app.quit())
   services.updater.start()
   services.channelWatch.start()
 
-  app.on('activate', () => {
-    if (!win) win = createWindow()
-  })
+  app.on('activate', () => showWindow())
 }
+
+// Every way a quit can start (tray Quit, "Restart to update", an app menu
+// quit, ...) goes through app.quit(), which fires this before it starts
+// closing windows. Setting the flag here, rather than only where quit is
+// requested, means the window's 'close' handler never hides it to the tray
+// mid-quit (electron-updater's quitAndInstall already spawns the installer
+// before calling app.quit(), so cancelling the quit there would leave the
+// installer racing a still-running app).
+app.on('before-quit', () => {
+  isQuitting = true
+})
 
 app.on('window-all-closed', () => app.quit())
 
@@ -115,6 +178,8 @@ app.on('will-quit', (event) => {
   if (quitting || !services) return
   event.preventDefault()
   quitting = true
+  tray?.destroy()
+  tray = null
   const s = services
   s.updater.stop()
   s.channelWatch.stop()

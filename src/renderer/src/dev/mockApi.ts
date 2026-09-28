@@ -3,7 +3,7 @@
 
 import { parseChannelName } from '@shared/channelName'
 import type { CrapcutApi, EventChannel, Events, InvokeChannel } from '@shared/ipc'
-import type { AppInfo, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
+import type { AppInfo, AutostartStatus, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
 
 const listeners = new Map<string, Set<(p: unknown) => void>>()
 function emit<E extends EventChannel>(e: E, p: Events[E]): void {
@@ -114,6 +114,7 @@ let clips: Clip[] = titles.map((title, i) => {
 let layouts: Layout[] = []
 let exports: ExportItem[] = []
 let channelWatch: ChannelWatchStatus = { channel: null, enabledAt: null, checking: false, lastCheckedAt: null, lastError: null }
+let autostart: AutostartStatus = { enabled: false, userSet: false }
 
 const info: AppInfo = {
   version: '0.1.0',
@@ -167,6 +168,11 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
   'channelWatch:clear': () => {
     channelWatch = { channel: null, enabledAt: null, checking: false, lastCheckedAt: null, lastError: null }
     emit('channelWatch:changed', channelWatch)
+  },
+  'settings:getAutostart': () => autostart,
+  'settings:setAutostart': (enabled: boolean) => {
+    autostart = { enabled, userSet: true }
+    return autostart
   }
 }
 

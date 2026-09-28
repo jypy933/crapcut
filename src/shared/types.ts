@@ -256,6 +256,13 @@ export interface ChannelWatchStatus {
   lastError: string | null
 }
 
+/** "Start CrapCut with Windows". Off by default, on by default while a channel is watched, unless the user has said otherwise. */
+export interface AutostartStatus {
+  enabled: boolean
+  /** True once the user has explicitly turned the toggle on or off; from then on their choice sticks. */
+  userSet: boolean
+}
+
 export type UpdateState =
   | { kind: 'idle' }
   | { kind: 'checking' }
