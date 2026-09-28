@@ -5,6 +5,7 @@ import { execFile, spawn } from 'node:child_process'
 import { constants, setPriority } from 'node:os'
 import { CancelledError } from '../util/errors'
 import { logger } from '../util/log'
+import { TASKKILL_EXE } from './systemTools'
 
 const log = logger('process')
 
@@ -43,7 +44,7 @@ export class ToolFailedError extends Error {
 /** Kills a process and everything it started (yt-dlp starts ffmpeg, etc.). */
 export function killTree(pid: number): void {
   if (process.platform === 'win32') {
-    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {})
+    execFile(TASKKILL_EXE, ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {})
   } else {
     try {
       process.kill(-pid, 'SIGKILL')

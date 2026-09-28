@@ -7,6 +7,7 @@ import { cpus, totalmem } from 'node:os'
 import { promisify } from 'node:util'
 import type { GpuInfo, GpuVendor, HardwareProfile } from '@shared/types'
 import { logger } from '../util/log'
+import { nvidiaSmiPath, REG_EXE } from './systemTools'
 
 const run = promisify(execFile)
 const log = logger('gpu')
@@ -106,7 +107,7 @@ export function chooseProfile(gpus: GpuInfo[], nvidiaDriver: number | null, tota
 
 async function reg(value: string): Promise<string> {
   try {
-    const { stdout } = await run('reg', ['query', ADAPTER_KEY, '/s', '/v', value], { windowsHide: true, timeout: 15000 })
+    const { stdout } = await run(REG_EXE, ['query', ADAPTER_KEY, '/s', '/v', value], { windowsHide: true, timeout: 15000 })
     return stdout
   } catch (err) {
     // reg exits 1 when nothing matched; its stdout is still useful.
@@ -129,8 +130,10 @@ export async function detectHardware(): Promise<HardwareProfile> {
   let driver: number | null = null
 
   if (gpus.some((g) => g.vendor === 'nvidia')) {
+    const smiExe = nvidiaSmiPath()
     try {
-      const { stdout } = await run('nvidia-smi', ['--query-gpu=name,memory.total,driver_version', '--format=csv,noheader,nounits'], {
+      if (!smiExe) throw new Error('nvidia-smi not found')
+      const { stdout } = await run(smiExe, ['--query-gpu=name,memory.total,driver_version', '--format=csv,noheader,nounits'], {
         windowsHide: true,
         timeout: 15000
       })
@@ -154,8 +157,10 @@ export async function detectHardware(): Promise<HardwareProfile> {
 
 /** Free VRAM in MB on NVIDIA cards, or null when unknown. */
 export async function nvidiaFreeVramMb(): Promise<number | null> {
+  const smiExe = nvidiaSmiPath()
+  if (!smiExe) return null
   try {
-    const { stdout } = await run('nvidia-smi', ['--query-gpu=memory.free', '--format=csv,noheader,nounits'], { windowsHide: true, timeout: 10000 })
+    const { stdout } = await run(smiExe, ['--query-gpu=memory.free', '--format=csv,noheader,nounits'], { windowsHide: true, timeout: 10000 })
     const n = Number(stdout.split(/\r?\n/)[0]?.trim())
     return Number.isFinite(n) ? n : null
   } catch {

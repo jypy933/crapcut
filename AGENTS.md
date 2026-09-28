@@ -67,6 +67,10 @@ close.
 
 - **Stack:** Electron + React + TypeScript, built with electron-vite; Vitest for
   tests; electron-builder (NSIS) + electron-updater for install and updates.
+  Scripts: `npm start`, `npm test`, `npm run typecheck`, `npm run build`,
+  `npm run test:ui`, `npm run e2e`, `npm run dist`, `npm run dev:ui`.
+- **Details:** see `docs/architecture.md` (how it fits together),
+  `docs/third-party.md` (pinned tools and licences), `docs/releasing.md`.
 - **Processes:** all tools, files and jobs live in the main process. The
   renderer is a sandboxed UI that talks to main over a small typed IPC surface
   (`src/shared/ipc.ts`), every message validated with zod on arrival.
@@ -108,9 +112,20 @@ close.
 - Render tests generate tiny inputs on the fly with FFmpeg (`testsrc2`, `sine`),
   render them and check the result with ffprobe (duration, streams, size). They
   skip cleanly when FFmpeg is not available.
-- An end-to-end run on a short real public VOD (`npm run e2e -- <url>`), not in
-  CI.
+- UI tests drive the built Electron app with Playwright (`npm run test:ui`;
+  smoke test on CI, full click-through with `E2E_VOD` set).
+- An end-to-end run on a short real public VOD
+  (`E2E_VOD=<url> npm run e2e`), not in CI.
 - Before finishing a task: `npm test`, `npm run typecheck`, `npm run build`.
+
+## Gotchas
+
+- Write files containing backslashes with an editor tool, not a shell heredoc
+  (the shell collapses `\`).
+- electron-vite 5 supports Vite up to 7: upgrade Vite, @vitejs/plugin-react and
+  electron-vite together.
+- Paths passed to whisper.cpp, llama-server and the separator are relative to
+  their working folder, so non-ASCII Windows user names cannot break them.
 
 ## Owner preferences
 

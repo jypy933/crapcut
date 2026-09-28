@@ -17,7 +17,12 @@ cut and the captions, and export.
 - **Your layout.** Mark where your facecam is once; vertical clips put the cam
   above the game automatically.
 
-> Status: early development. Not ready for use yet.
+- **Your audio.** Per clip: original audio, voice only, voice with quieter
+  game, or voice with your own music (the voice is separated on your PC, only
+  for the clips you export).
+
+> Status: first test builds. Tested end to end on AMD; the first NVIDIA run is
+> still to come.
 
 ## Requirements
 
@@ -47,10 +52,18 @@ Requires Node 22+ and Git. FFmpeg on `PATH` is used by the render tests.
 ```bash
 npm install
 npm start          # run the app in development
-npm test           # unit and render tests
+npm test           # unit and render tests (render tests need ffmpeg on PATH)
 npm run typecheck
 npm run build      # production build
+npm run test:ui    # drive the built app with Playwright (after build)
 npm run dist       # Windows installer (release/)
+npm run dev:ui     # UI only, in a browser, with a fake backend
+```
+
+End-to-end on a real short VOD (downloads the pinned tools into `.e2e/`):
+
+```bash
+E2E_VOD=https://www.twitch.tv/videos/<id> npm run e2e
 ```
 
 See [AGENTS.md](AGENTS.md) for the design brief and
