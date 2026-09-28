@@ -4,6 +4,7 @@
 // clips that came from different sources still line up cleanly.
 
 import { OUTPUT_SIZE } from '@shared/layoutGeometry'
+import type { Clip } from '@shared/types'
 import { encoderArgs, type EncoderId } from './render'
 
 /** The join always targets this frame rate and audio format, whatever the inputs used. */
@@ -14,6 +15,16 @@ export const DEFAULT_CROSSFADE_SEC = 0.5
 /** A crossfade never eats more than this share of either neighbouring clip. */
 const MAX_CROSSFADE_SHARE = 0.4
 const MIN_CROSSFADE_SEC = 0.05
+
+/**
+ * Which clips go into the best-of, and in what order: kept clips only, in
+ * stream order (by start time). `clip.rank` is strength order (the finder's
+ * favourite moment first) -- it must never be used to order the join, or the
+ * video would jump around the stream instead of playing through it.
+ */
+export function keptClipsInOrder(clips: readonly Clip[]): Clip[] {
+  return clips.filter((c) => c.status === 'accepted').sort((a, b) => a.start - b.start)
+}
 
 export interface BestOfClipInput {
   /** Path passed to `-i`, resolved relative to the FFmpeg working directory. */

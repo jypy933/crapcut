@@ -1,7 +1,55 @@
 import { describe, expect, it } from 'vitest'
-import { buildBestOfArgs, planBestOfJoin, type BestOfClipInput } from './bestOf'
+import type { Clip } from '@shared/types'
+import { buildBestOfArgs, keptClipsInOrder, planBestOfJoin, type BestOfClipInput } from './bestOf'
 
 const clip = (duration: number, hasAudio = true, file = 'c.mp4'): BestOfClipInput => ({ file, duration, hasAudio })
+
+/** A minimal fake Clip; only the fields keptClipsInOrder cares about vary per call. */
+const fakeClip = (overrides: Partial<Clip> & { id: string }): Clip => ({
+  jobId: 'job1',
+  rank: 1,
+  score: 0.5,
+  title: overrides.id,
+  start: 0,
+  end: 30,
+  suggested: { start: 0, end: 30 },
+  source: null,
+  status: 'accepted',
+  words: [],
+  captions: { enabled: true, y: 0.7, uppercase: true, styleId: 'clean' },
+  audio: 'original',
+  musicPath: null,
+  layoutId: null,
+  formats: { vertical: true, horizontal: false },
+  reason: 'Chat spike',
+  signals: null,
+  ...overrides
+})
+
+describe('keptClipsInOrder', () => {
+  it('sorts by start time, not by rank', () => {
+    // rank 1 is the finder's favourite (highest score), not the first clip in
+    // the stream -- the strongest moment here happens latest in the VOD.
+    const late = fakeClip({ id: 'late', rank: 1, start: 500 })
+    const early = fakeClip({ id: 'early', rank: 3, start: 10 })
+    const middle = fakeClip({ id: 'middle', rank: 2, start: 200 })
+    expect(keptClipsInOrder([late, early, middle]).map((c) => c.id)).toEqual(['early', 'middle', 'late'])
+  })
+
+  it('drops pending and rejected clips', () => {
+    const kept = fakeClip({ id: 'kept', start: 10, status: 'accepted' })
+    const rejected = fakeClip({ id: 'rejected', start: 5, status: 'rejected' })
+    const pending = fakeClip({ id: 'pending', start: 1, status: 'pending' })
+    expect(keptClipsInOrder([kept, rejected, pending]).map((c) => c.id)).toEqual(['kept'])
+  })
+
+  it('does not mutate the input array', () => {
+    const list = [fakeClip({ id: 'b', start: 20 }), fakeClip({ id: 'a', start: 10 })]
+    const copy = [...list]
+    keptClipsInOrder(list)
+    expect(list).toEqual(copy)
+  })
+})
 
 describe('planBestOfJoin', () => {
   it('has no transitions for zero or one clip', () => {

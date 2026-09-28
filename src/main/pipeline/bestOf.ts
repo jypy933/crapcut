@@ -5,7 +5,7 @@
 
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildBestOfArgs, DEFAULT_CROSSFADE_SEC, planBestOfJoin, type BestOfClipInput } from '../core/bestOf'
+import { buildBestOfArgs, DEFAULT_CROSSFADE_SEC, keptClipsInOrder, planBestOfJoin, type BestOfClipInput } from '../core/bestOf'
 import { EtaEstimator } from '../core/eta'
 import type { EncoderId } from '../core/render'
 import { parseProgressSeconds } from '../core/render'
@@ -17,6 +17,7 @@ import { isCancelled, UserError, userMessage } from '../util/errors'
 import { moveFile } from '../util/fsx'
 import { logger } from '../util/log'
 import { safeFileName, type Exporter } from './exporter'
+import type { GpuLock } from './gpuLock'
 import { probeMedia } from './media'
 import { loadMeta } from './steps'
 import type { BestOfItem } from '@shared/types'
@@ -50,6 +51,8 @@ export class BestOfBuilder {
     private readonly tools: ToolRegistry,
     /** Reused for per-clip rendering and encoder choice, so both stay in step with normal exports. */
     private readonly exporter: Exporter,
+    /** Shared with the exporter so a build and a normal export never encode at the same time. */
+    private readonly encodeLock: GpuLock,
     private readonly events: BestOfEvents
   ) {}
 
@@ -67,7 +70,7 @@ export class BestOfBuilder {
 
   /** Queues a best-of build for the job's currently kept clips. */
   start(jobId: string): string {
-    const kept = this.store.clips(jobId).filter((c) => c.status === 'accepted')
+    const kept = keptClipsInOrder(this.store.clips(jobId))
     if (kept.length === 0) throw new UserError('Keep at least one clip first.', { retryable: false })
     for (const c of kept) if (!c.source) throw new UserError('Every kept clip needs its video downloaded first.', { retryable: false })
     // Only one build per job at a time; a new one replaces whatever was queued or running.
@@ -125,9 +128,13 @@ export class BestOfBuilder {
   private async run(id: string, signal: AbortSignal): Promise<void> {
     const item = this.store.bestOfList().find((e) => e.id === id)
     if (!item) return
-    this.store.updateBestOf(id, { status: 'running', progress: 0, error: null })
-    this.emit(id, true)
+    // Stays "queued" (shown as waiting) until the exporter is free -- a full
+    // encode never runs at the same time as a normal export.
+    let release: (() => void) | null = null
     try {
+      release = await this.encodeLock.acquire(signal)
+      this.store.updateBestOf(id, { status: 'running', progress: 0, error: null })
+      this.emit(id, true)
       const file = await this.build(item.jobId, id, signal, (f, eta) => {
         this.progress.set(id, { progress: f, etaSec: eta })
         this.emit(id)
@@ -140,16 +147,15 @@ export class BestOfBuilder {
         log.error(`best-of ${id.slice(0, 8)} failed`, err)
         this.store.updateBestOf(id, { status: 'failed', error: userMessage(err, 'The best-of video could not be built. Try again.') })
       }
+    } finally {
+      release?.()
     }
     this.progress.delete(id)
     this.emit(id, true)
   }
 
   private async build(jobId: string, id: string, signal: AbortSignal, onProgress: (f: number, eta: number | null) => void): Promise<string> {
-    const kept = this.store
-      .clips(jobId)
-      .filter((c) => c.status === 'accepted')
-      .sort((a, b) => a.rank - b.rank)
+    const kept = keptClipsInOrder(this.store.clips(jobId))
     if (kept.length === 0) throw new UserError('Keep at least one clip first.', { retryable: false })
 
     const dir = jobDir(this.paths, jobId)
