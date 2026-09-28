@@ -1,0 +1,50 @@
+# Windows installer and auto-update feed. `npm run dist` builds release/.
+appId: io.github.jypy933.crapcut
+productName: CrapCut
+copyright: Copyright © 2026 jypy933 and CrapCut contributors
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+extraResources:
+  - from: resources
+    to: resources
+asar: true
+npmRebuild: false
+electronLanguages:
+  - en-US
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: CrapCut-Setup-${version}.${ext}
+  # v1 is unsigned; SignPath signing is added after the first stable release.
+  signAndEditExecutable: true
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: CrapCut
+  uninstallDisplayName: CrapCut
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
+publish:
+  - provider: github
+    owner: jypy933
+    repo: crapcut
+    releaseType: release
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: false
