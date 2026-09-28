@@ -52,6 +52,11 @@ export async function createServices(resources: string, getWindow: () => Browser
   const tools = new ToolRegistry(paths.tools, paths.downloads, (url, init) => fetch(url, init))
   const setup = new SetupManager(tools, hardware, paths.root)
   const gpu = new GpuLock()
+  // A separate lock (not the AI-model one above): keeps a normal export and a
+  // best-of build from encoding at the same time -- two full encodes plus a
+  // possible stem separation is too much for the friend's PC and its
+  // hardware encoder session.
+  const encodeLock = new GpuLock()
 
   const runner = new JobRunner(store, paths, tools, () => hardware, gpu, {
     onJobChanged: (job) => sendEvent(getWindow(), 'jobs:changed', job),
@@ -72,10 +77,10 @@ export async function createServices(resources: string, getWindow: () => Browser
       }
     }
   })
-  const exporter = new Exporter(store, paths, tools, () => hardware, gpu, {
+  const exporter = new Exporter(store, paths, tools, () => hardware, gpu, encodeLock, {
     onChanged: (item) => sendEvent(getWindow(), 'exports:changed', item)
   })
-  const bestOf = new BestOfBuilder(store, paths, tools, exporter, {
+  const bestOf = new BestOfBuilder(store, paths, tools, exporter, encodeLock, {
     onChanged: (item) => sendEvent(getWindow(), 'bestOf:changed', item)
   })
   const updater = new Updater((s) => sendEvent(getWindow(), 'app:update', s))

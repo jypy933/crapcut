@@ -55,6 +55,8 @@ export class Exporter {
     private readonly tools: ToolRegistry,
     private readonly hw: () => HardwareProfile,
     private readonly gpu: GpuLock,
+    /** Shared with the best-of builder so an export and a build never encode at the same time. */
+    private readonly encodeLock: GpuLock,
     private readonly events: ExporterEvents
   ) {}
 
@@ -140,9 +142,13 @@ export class Exporter {
   private async run(id: string, signal: AbortSignal): Promise<void> {
     const item = this.store.exports().find((e) => e.id === id)
     if (!item) return
-    this.store.updateExport(id, { status: 'running', progress: 0, error: null })
-    this.emit(id, true)
+    // Stays "queued" (shown as waiting) until the best-of builder is free --
+    // a full encode never runs at the same time as a best-of build.
+    let release: (() => void) | null = null
     try {
+      release = await this.encodeLock.acquire(signal)
+      this.store.updateExport(id, { status: 'running', progress: 0, error: null })
+      this.emit(id, true)
       const file = await this.render(item, signal, (f, eta) => {
         this.progress.set(id, { progress: f, etaSec: eta })
         this.emit(id)
@@ -155,6 +161,8 @@ export class Exporter {
         log.error(`export ${id.slice(0, 8)} failed`, err)
         this.store.updateExport(id, { status: 'failed', error: userMessage(err, 'This clip could not be exported. Try again.') })
       }
+    } finally {
+      release?.()
     }
     this.progress.delete(id)
     this.emit(id, true)
