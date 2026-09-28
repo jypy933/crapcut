@@ -1,0 +1,44 @@
+# Third-party software and models
+
+CrapCut's own code is MIT-licensed. It uses the tools and models below, which
+keep their own licences. **None of the tools or models are included in the
+installer**: they are downloaded on first run from the official source listed,
+pinned to the exact version, and checked against the SHA-256 in
+[`src/main/tools/manifest.ts`](../src/main/tools/manifest.ts).
+
+## Downloaded on first run
+
+| Component | Version | Licence | Source |
+| --- | --- | --- | --- |
+| FFmpeg (Windows build by gyan.dev, "essentials") | 8.1.1 | GPL-3.0 | https://github.com/GyanD/codexffmpeg/releases/tag/8.1.1 |
+| yt-dlp | 2026.08.19 | Unlicense | https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19 |
+| TwitchDownloaderCLI | 1.56.5 | MIT | https://github.com/lay295/TwitchDownloader/releases/tag/1.56.5 |
+| whisper.cpp (CPU build) | 1.9.4 (b5130) | MIT | https://github.com/ggml-org/whisper.cpp/releases/tag/b5130 |
+| whisper.cpp (CUDA 11.8 build, NVIDIA only; includes NVIDIA CUDA runtime under the NVIDIA CUDA EULA) | 1.9.4 (b5130) | MIT | https://github.com/ggml-org/whisper.cpp/releases/tag/b5130 |
+| llama.cpp (Vulkan build) | b11236 | MIT | https://github.com/ggml-org/llama.cpp/releases/tag/b11236 |
+| Whisper large-v3-turbo (q8_0, GPU) or small (q8_0, CPU) | ggml | MIT (OpenAI Whisper) | https://huggingface.co/ggerganov/whisper.cpp |
+| Silero VAD | 6.2.0 | MIT | https://huggingface.co/ggml-org/whisper-vad |
+| Ministral 3 8B Instruct 2512 (Q4_K_M), or 3B on smaller GPUs | 2512 | Apache-2.0 | https://huggingface.co/mistralai |
+
+## Inside the app
+
+| Component | Licence |
+| --- | --- |
+| Electron (includes Chromium and Node.js) | MIT (Chromium notices in `LICENSES.chromium.html` next to the app) |
+| React, React DOM | MIT |
+| Lucide icons | ISC |
+| Zod | MIT |
+| electron-updater | MIT |
+| yauzl | MIT |
+| Montserrat font (caption font) | SIL Open Font License 1.1, see `resources/fonts/OFL.txt` |
+
+The About screen in the app lists the same information with links.
+
+## Updating a pinned tool
+
+1. Pick the new official release.
+2. Update `url`, `version`, `size` and `sha256` in `src/main/tools/manifest.ts`
+   (GitHub shows the SHA-256 of release assets; for Hugging Face use the file's
+   LFS SHA-256).
+3. Run `npm run e2e` with a short VOD, then release a new app version. Old
+   versions are removed automatically after the new one installs.
