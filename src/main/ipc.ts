@@ -8,6 +8,7 @@ import type { Events, EventChannel } from '@shared/ipc'
 import { parseVodUrl } from '@shared/vodUrl'
 import type { Clip } from '@shared/types'
 import { applyClipPatch, resetClip } from './clips'
+import { hasEnoughHistory, type TasteDecision } from './core/taste'
 import { isAppUrl, openExternalSafely } from './security'
 import type { AppServices } from './services'
 import { UserError } from './util/errors'
@@ -65,11 +66,13 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
       const job = store.job(clip.jobId)
       const next = applyClipPatch(clip, patch as never, (id) => !!store.layout(id), job?.vod?.durationSec ?? clip.end)
       store.saveClip(next)
+      syncTasteDecision(next)
       return next
     },
     'clips:reset': (clipId: string) => {
       const next = resetClip(requireClip(clipId))
       store.saveClip(next)
+      syncTasteDecision(next)
       return next
     },
     'clips:pickMusic': async (clipId: string) => {
@@ -102,13 +105,24 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
     'exports:show': (id: string) => {
       const item = exporter.list().find((e) => e.id === id)
       if (item?.file && existsSync(item.file)) shell.showItemInFolder(item.file)
-    }
+    },
+
+    'taste:status': () => ({ tuned: hasEnoughHistory(store.getTasteHistory()) }),
+    'taste:reset': () => store.clearTasteHistory()
   }
 
   function requireClip(id: string): Clip {
     const clip = store.clip(id)
     if (!clip) throw new UserError('That clip no longer exists.', { retryable: false })
     return clip
+  }
+
+  /** Keeps the taste history in step with a clip's current decision and cut. */
+  function syncTasteDecision(clip: Clip): void {
+    if (!clip.signals) return
+    const decision: TasteDecision | null =
+      clip.status === 'pending' ? null : { status: clip.status, signals: clip.signals, suggested: clip.suggested, final: { start: clip.start, end: clip.end } }
+    store.recordTasteDecision(clip.id, decision)
   }
 
   for (const channel of Object.keys(Invoke) as InvokeChannel[]) {

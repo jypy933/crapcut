@@ -74,7 +74,9 @@ export const Invoke = {
   'exports:list': z.tuple([id]),
   'exports:start': z.tuple([id, z.array(id).min(1).max(200)]),
   'exports:cancel': z.tuple([id]),
-  'exports:show': z.tuple([id])
+  'exports:show': z.tuple([id]),
+  'taste:status': z.tuple([]),
+  'taste:reset': z.tuple([])
 } as const
 
 export type InvokeChannel = keyof typeof Invoke
@@ -113,6 +115,8 @@ export interface InvokeResult {
   'exports:start': string[]
   'exports:cancel': void
   'exports:show': void
+  'taste:status': { tuned: boolean }
+  'taste:reset': void
 }
 
 /** Events pushed from main to the UI. */
