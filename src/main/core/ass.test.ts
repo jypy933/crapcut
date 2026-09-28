@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { captionAt, clipWords, groupWords } from '@shared/captions'
+import { CAPTION_STYLES, captionStyle } from '@shared/captionStyles'
 import type { Word } from '@shared/types'
 import { assColor, assEscape, assTime, buildAss, defaultAssStyle, inlineColor } from './ass'
 
@@ -77,5 +78,58 @@ describe('buildAss', () => {
   })
   it('handles no words', () => {
     expect(buildAss([], defaultAssStyle('horizontal', 0.8, false))).toContain('[Events]')
+  })
+})
+
+describe('caption style presets', () => {
+  it('has 4 presets with distinct looks', () => {
+    expect(CAPTION_STYLES).toHaveLength(4)
+    expect(new Set(CAPTION_STYLES.map((s) => s.id)).size).toBe(4)
+  })
+
+  it('falls back to the clean preset for an unknown id', () => {
+    expect(captionStyle('nope').id).toBe('clean')
+    expect(captionStyle(undefined).id).toBe('clean')
+  })
+
+  it('boxed draws an opaque box instead of an outline', () => {
+    const ass = buildAss([w(0, 0.4, 'hey')], defaultAssStyle('vertical', 0.7, false, captionStyle('boxed')))
+    const style = ass.split('\n').find((l) => l.startsWith('Style:'))!
+    const fields = style.split(',')
+    expect(fields[15]).toBe('3') // BorderStyle: opaque box
+  })
+
+  it('clean and minimal use a normal outline', () => {
+    for (const id of ['clean', 'minimal'] as const) {
+      const ass = buildAss([w(0, 0.4, 'hey')], defaultAssStyle('vertical', 0.7, false, captionStyle(id)))
+      const fields = ass.split('\n').find((l) => l.startsWith('Style:'))!.split(',')
+      expect(fields[15]).toBe('1')
+    }
+  })
+
+  it('bold pop highlights shouted words and numbers even when not active', () => {
+    // All 3 words land in one group (maxWords 3): "we" is active, "100" and
+    // "STOP" should stay highlighted as keywords.
+    const words = [w(0, 0.3, 'we'), w(0.3, 0.6, '100'), w(0.6, 0.9, 'STOP')]
+    const ass = buildAss(words, defaultAssStyle('vertical', 0.7, false, captionStyle('bold')))
+    const first = ass.split('\n').filter((l) => l.startsWith('Dialogue:'))[0]!
+    expect(first.match(/\\c/g)?.length).toBe(6) // 3 highlighted words, open+close each
+  })
+
+  it('clean does not highlight words that are not active', () => {
+    const words = [w(0, 0.3, 'we'), w(0.3, 0.6, '100'), w(0.6, 0.9, 'STOP')]
+    const ass = buildAss(words, defaultAssStyle('vertical', 0.7, false, captionStyle('clean')))
+    const first = ass.split('\n').filter((l) => l.startsWith('Dialogue:'))[0]!
+    expect(first.match(/\\c/g)?.length).toBe(2) // only the active word
+  })
+
+  it('a style without pop skips the grow-in tag', () => {
+    const ass = buildAss([w(0, 0.4, 'hey')], defaultAssStyle('vertical', 0.7, false, captionStyle('minimal')))
+    expect(ass).not.toContain('\\fscx88')
+  })
+
+  it('a style with pop grows the first word in', () => {
+    const ass = buildAss([w(0, 0.4, 'hey')], defaultAssStyle('vertical', 0.7, false, captionStyle('clean')))
+    expect(ass).toContain('\\fscx88')
   })
 })
