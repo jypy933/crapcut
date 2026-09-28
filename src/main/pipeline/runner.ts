@@ -44,7 +44,8 @@ export class JobRunner {
     private readonly tools: ToolRegistry,
     private readonly hw: () => HardwareProfile,
     private readonly gpu: GpuLock,
-    private readonly events: RunnerEvents
+    private readonly events: RunnerEvents,
+    private readonly options: { llmModelOverride?: string } = {}
   ) {}
 
   private emit(id: string, force = false): void {
@@ -171,6 +172,7 @@ export class JobRunner {
         hw: this.hw(),
         gpu: this.gpu,
         signal,
+        llmModelOverride: this.options.llmModelOverride,
         log: logger(`job ${id.slice(0, 8)} ${step}`),
         progress: (fraction, detail) => {
           const f = Math.max(0, Math.min(1, fraction))

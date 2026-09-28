@@ -4,6 +4,7 @@ import type { ChatMessage } from './chat'
 import {
   CLIP_MAX_SEC,
   CLIP_MIN_SEC,
+  edgeSkip,
   fallbackTitle,
   findCandidates,
   selectNonOverlapping,
@@ -50,6 +51,14 @@ describe('targetClipCount', () => {
     expect(targetClipCount(600)).toBe(3)
     expect(targetClipCount(4 * 3600)).toBe(12)
     expect(targetClipCount(20 * 3600)).toBe(20)
+  })
+})
+
+describe('edgeSkip', () => {
+  it('skips stream start and end, less on short VODs', () => {
+    expect(edgeSkip(4 * 3600)).toEqual({ start: 120, end: 60 })
+    expect(edgeSkip(600)).toEqual({ start: 30, end: 18 })
+    expect(edgeSkip(100)).toEqual({ start: 15, end: 10 })
   })
 })
 

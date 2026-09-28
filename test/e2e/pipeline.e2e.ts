@@ -44,6 +44,7 @@ describe.skipIf(!VOD)('end to end on a real VOD', () => {
       const tools = new ToolRegistry(paths.tools, paths.downloads)
       for (const a of neededArtifacts(hw)) {
         if (a.id.startsWith('model-llm') && process.env.E2E_LLM !== '1') continue
+        if (a.id === 'llama' && process.env.E2E_LLM !== '1' && !process.env.E2E_LLM_MODEL) continue
         if (tools.isInstalled(a)) continue
         const t0 = Date.now()
         await tools.install(a, undefined, () => {})
@@ -65,10 +66,12 @@ describe.skipIf(!VOD)('end to end on a real VOD', () => {
           lastLine = line
         },
         onJobReady: () => {}
-      })
+      }, { llmModelOverride: process.env.E2E_LLM_MODEL ? resolve(process.env.E2E_LLM_MODEL) : undefined })
 
       const existing = store.findActiveJobForVod(parsed.id)
       const jobId = existing ?? store.createJob(parsed.url, parsed.id)
+      // Re-find moments on a finished job when testing the language model.
+      if (existing && process.env.E2E_LLM_MODEL) store.resetStepsFrom(jobId, 'moments')
       const started = Date.now()
       runner.enqueue(jobId)
       while (!last || !['review', 'failed', 'cancelled'].includes((last as JobSummary).status) || store.job(jobId)!.status === 'running') {

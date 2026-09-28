@@ -25,3 +25,4 @@ coverage/
 .test-tmp/
 .e2e/
 .claude/settings.local.json
+test/**/*.local.test.ts

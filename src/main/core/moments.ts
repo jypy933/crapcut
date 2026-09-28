@@ -36,9 +36,13 @@ export const CLIP_MIN_SEC = 12
 export const CLIP_MAX_SEC = 60
 /** Viewers see the stream a few seconds late and need a moment to type. */
 export const CHAT_DELAY_SEC = 7
-/** Stream starts ("LIVE Pog") and ends ("gn") are never clips. */
-const SKIP_START_SEC = 120
-const SKIP_END_SEC = 60
+/**
+ * Stream starts ("LIVE Pog") and ends ("gn") are never clips: skip the first
+ * two minutes and the last minute, less on short VODs.
+ */
+export function edgeSkip(durationSec: number): { start: number; end: number } {
+  return { start: Math.min(120, Math.max(15, durationSec * 0.05)), end: Math.min(60, Math.max(10, durationSec * 0.03)) }
+}
 
 /** About one clip per 20 minutes of stream, between 3 and 20. */
 export function targetClipCount(durationSec: number): number {
@@ -144,6 +148,8 @@ export function findCandidates(inputs: MomentInputs, opts: FindOptions): Candida
     audioZ = robustZ(movingAverage(lifted, 3), 600, 1.5)
   }
 
+  const skip = edgeSkip(durationSec)
+  const inside = (t: number): boolean => t >= skip.start && t <= durationSec - skip.end
   const raw: Candidate[] = []
   const add = (peak: number, onset: number, strength: number, cz: number, az: number, reasons: string[]): void => {
     const event = Math.max(0, onset - (cz > 0 ? CHAT_DELAY_SEC : 1))
@@ -154,11 +160,11 @@ export function findCandidates(inputs: MomentInputs, opts: FindOptions): Candida
   // Start strict; relax when a quiet or short stream gives too few moments.
   let chatPeaks = findPeaks(chatZ, 2.5, 45)
   for (const minZ of [2, 1.6]) {
-    if (chatPeaks.filter((p) => p.t >= SKIP_START_SEC && p.t <= durationSec - SKIP_END_SEC).length >= opts.limit / 2) break
+    if (chatPeaks.filter((p) => inside(p.t)).length >= opts.limit / 2) break
     chatPeaks = findPeaks(chatZ, minZ, 45)
   }
   for (const p of chatPeaks) {
-    if (p.t < SKIP_START_SEC || p.t > durationSec - SKIP_END_SEC) continue
+    if (!inside(p.t)) continue
     if (uniqueChatters(messages, p.onset - 2, p.t + 2) < 3) continue
     const az = Math.max(0, maxIn(audioZ, p.onset - CHAT_DELAY_SEC - 15, p.t - CHAT_DELAY_SEC + 5))
     const reasons = ['Chat spike', ...reasonsFor(messages, p.onset - 1, p.t + 4)]
@@ -168,7 +174,7 @@ export function findCandidates(inputs: MomentInputs, opts: FindOptions): Candida
 
   // Loud moments chat did not react to (useful for small chats).
   for (const p of findPeaks(audioZ, 3, 60)) {
-    if (p.t < SKIP_START_SEC || p.t > durationSec - SKIP_END_SEC) continue
+    if (!inside(p.t)) continue
     if (raw.some((c) => Math.abs(c.event - p.t) < 30)) continue
     add(p.t, p.onset, 0.6 * p.z, 0, p.z, ['Loud moment'])
   }

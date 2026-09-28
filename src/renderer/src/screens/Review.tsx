@@ -146,7 +146,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
             <ArrowLeft size={16} />
           </button>
           <div className="grow">
-            <div style={{ fontWeight: 600 }}>{clips.length} {clips.length === 1 ? "clip" : "clips"}</div>
+            <div style={{ fontWeight: 600 }}>{clips.length} {clips.length === 1 ? 'clip' : 'clips'}</div>
             <div className="small faint">{kept.length} kept</div>
           </div>
         </div>

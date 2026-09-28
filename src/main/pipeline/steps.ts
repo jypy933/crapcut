@@ -34,6 +34,8 @@ export interface StepContext {
   gpu: GpuLock
   signal: AbortSignal
   log: Logger
+  /** Tests only: use this GGUF instead of the installed language model. */
+  llmModelOverride?: string
   /** Reports 0..1 progress for the current step, with an optional detail line. */
   progress: (fraction: number, detail?: string | null) => void
 }
@@ -326,7 +328,7 @@ async function refineWithLlm(
   duration: number
 ): Promise<(Refined | null)[]> {
   const exe = ctx.tools.path('llama')
-  const model = ctx.tools.path('model-llm-8b') ?? ctx.tools.path('model-llm-3b')
+  const model = ctx.llmModelOverride ?? ctx.tools.path('model-llm-8b') ?? ctx.tools.path('model-llm-3b')
   const out: (Refined | null)[] = candidates.map(() => null)
   if (!exe || !model) {
     ctx.log.info('language model not installed; using signals only')
