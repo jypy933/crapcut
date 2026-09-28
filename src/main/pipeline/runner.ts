@@ -18,14 +18,6 @@ const log = logger('runner')
 
 const MAX_AUTO_RETRIES = 3
 
-/** Rough disk space a job needs: audio + a temporary WAV + clip video. */
-export function estimateJobBytes(durationSec: number): number {
-  const audio = durationSec * 26_000
-  const wav = durationSec * 32_000
-  const clips = 20 * 80 * 1_000_000
-  return Math.round(audio + wav + clips + 500_000_000)
-}
-
 type StopReason = 'pause' | 'cancel' | 'delete'
 
 export interface RunnerEvents {
@@ -131,21 +123,16 @@ export class JobRunner {
     this.store.setJobStatus(id, 'running')
     this.emit(id, true)
 
-    const job0 = this.store.job(id)
-    if (!job0) return
-    if (job0.vod) {
-      const free = await freeBytes(this.paths.root)
-      if (free !== null && free < estimateJobBytes(job0.vod.durationSec) * 0.5) {
-        this.store.setJobStatus(id, 'failed', 'Not enough free disk space for this VOD. Free a few GB and try again.')
-        this.emit(id, true)
-        return
-      }
-    }
-
     for (const step of STEP_IDS) {
       const job = this.store.job(id)
       if (!job) return
       if (job.steps[step].status === 'done' || job.steps[step].status === 'skipped') continue
+      // Once the VOD length is known, make sure the downloads will fit.
+      if (step !== 'metadata' && job.vod && !(await this.enoughDisk(job.vod.durationSec, job.steps))) {
+        this.store.setJobStatus(id, 'failed', 'Not enough free disk space for this VOD. Free a few GB and try again.')
+        this.emit(id, true)
+        return
+      }
       const ok = await this.runStep(job, step, dir, signal)
       if (!ok) return
     }
@@ -153,6 +140,16 @@ export class JobRunner {
     const done = this.store.job(id)
     this.emit(id, true)
     if (done) this.events.onJobReady(done)
+  }
+
+  private async enoughDisk(durationSec: number, steps: JobSummary['steps']): Promise<boolean> {
+    const free = await freeBytes(this.paths.root)
+    if (free === null) return true
+    // Only what is still to come: the audio and WAV, then the clip videos.
+    let need = 300_000_000
+    if (steps.audio.status !== 'done') need += durationSec * 58_000
+    if (steps.clips.status !== 'done') need += 20 * 80 * 1_000_000
+    return free >= need
   }
 
   /** Runs one step with retries. Returns false when the job should stop. */
