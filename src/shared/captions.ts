@@ -85,3 +85,17 @@ export function clipWords(words: Word[], clipStart: number, clipEnd: number): Wo
 export function displayText(text: string, uppercase: boolean): string {
   return uppercase ? text.toLocaleUpperCase() : text
 }
+
+/**
+ * A simple, text-only signal for words worth calling out: shouted (ALL CAPS),
+ * a number, or ending in "!". Used by styles with keyword emphasis on.
+ */
+export function isKeywordWord(text: string): boolean {
+  const t = text.trim()
+  if (!t) return false
+  const letters = t.replace(/[^A-Za-z]/g, '')
+  const shouted = letters.length >= 2 && letters === letters.toUpperCase()
+  const numeric = /\d/.test(t)
+  const excited = t.length > 1 && t.endsWith('!')
+  return shouted || numeric || excited
+}
