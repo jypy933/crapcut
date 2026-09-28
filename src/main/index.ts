@@ -42,6 +42,15 @@ function showWindow(): void {
   win.focus()
 }
 
+const TRAY_HINT_SHOWN_KEY = 'trayHintShown'
+
+/** The first time the window hides to the tray, a short balloon explains where it went. */
+function showTrayHintOnce(s: AppServices): void {
+  if (!tray || s.store.get<boolean>(TRAY_HINT_SHOWN_KEY)) return
+  s.store.set(TRAY_HINT_SHOWN_KEY, true)
+  tray.displayBalloon({ title: 'CrapCut', content: 'CrapCut is still running here.', iconType: 'none' })
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
@@ -102,6 +111,7 @@ function createWindow(): BrowserWindow {
     if (shouldHideOnClose(state)) {
       event.preventDefault()
       w.hide()
+      showTrayHintOnce(services)
     }
   })
   // Windows is ending the session (shutdown, restart or sign-out): let the
