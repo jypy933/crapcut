@@ -15,7 +15,7 @@ const clip: Clip = {
   source: { start: 80, end: 150 },
   status: 'pending',
   words: [],
-  captions: { enabled: true, y: 0.7, uppercase: true },
+  captions: { enabled: true, y: 0.7, uppercase: true, styleId: 'clean' },
   audio: 'original',
   musicPath: null,
   layoutId: null,

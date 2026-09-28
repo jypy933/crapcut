@@ -67,6 +67,8 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
       const next = applyClipPatch(clip, patch as never, (id) => !!store.layout(id), job?.vod?.durationSec ?? clip.end)
       store.saveClip(next)
       syncTasteDecision(next)
+      // The last caption style picked becomes the default for new clips.
+      if (next.captions.styleId !== clip.captions.styleId) store.set('defaultCaptionStyleId', next.captions.styleId)
       return next
     },
     'clips:reset': (clipId: string) => {

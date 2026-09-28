@@ -1,5 +1,7 @@
 // Types shared by the main process and the renderer. Plain data only.
 
+import type { CaptionStyleId } from './captionStyles'
+
 /** One transcribed word, times in seconds from the start of the VOD. */
 export interface Word {
   t0: number
@@ -108,6 +110,7 @@ export interface CaptionSettings {
   /** Vertical centre of the caption block, 0 (top) .. 1 (bottom). */
   y: number
   uppercase: boolean
+  styleId: CaptionStyleId
 }
 
 export interface ClipFormats {

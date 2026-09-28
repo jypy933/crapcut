@@ -4,6 +4,7 @@
 import { z } from 'zod'
 import type { AppInfo, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
 import { AUDIO_MODES } from './types'
+import { CAPTION_STYLE_IDS } from './captionStyles'
 import { EVENT_CHANNELS, type INVOKE_CHANNELS } from './channels'
 
 export { EVENT_CHANNELS }
@@ -34,7 +35,7 @@ export const ClipPatchSchema = z
     end: seconds,
     status: z.enum(['pending', 'accepted', 'rejected']),
     words: z.array(WordSchema).max(5000),
-    captions: z.object({ enabled: z.boolean(), y: unit, uppercase: z.boolean() }).strict(),
+    captions: z.object({ enabled: z.boolean(), y: unit, uppercase: z.boolean(), styleId: z.enum(CAPTION_STYLE_IDS) }).strict(),
     audio: z.enum(AUDIO_MODES),
     layoutId: id.nullable(),
     formats: z.object({ vertical: z.boolean(), horizontal: z.boolean() }).strict()

@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildAss, defaultAssStyle } from '../../src/main/core/ass'
 import { buildLoudnessMeasureArgs, buildRenderArgs, parseLoudnessMeasure, type RenderSpec } from '../../src/main/core/render'
+import { CAPTION_STYLES } from '../../src/shared/captionStyles'
 import type { Layout } from '../../src/shared/types'
 import { awkwardTempDir, FFMPEG, ffmpeg, hasFfmpeg, makeTestVideo, makeTone, probe } from './helpers'
 import { execFile } from 'node:child_process'
@@ -18,6 +19,12 @@ describe.skipIf(!hasFfmpeg)('render with FFmpeg', () => {
   let dir = ''
   let cleanup = (): void => {}
   let source = ''
+  const words = [
+    { t0: 0.2, t1: 0.6, text: 'this' },
+    { t0: 0.6, t1: 1.0, text: 'is' },
+    { t0: 1.0, t1: 1.6, text: "Zoë's" },
+    { t0: 1.8, t1: 2.4, text: 'clip!' }
+  ]
 
   beforeAll(async () => {
     ;({ dir, cleanup } = awkwardTempDir())
@@ -25,12 +32,6 @@ describe.skipIf(!hasFfmpeg)('render with FFmpeg', () => {
     await makeTestVideo(source, 6)
     mkdirSync(join(dir, 'fonts'))
     copyFileSync(FONT, join(dir, 'fonts', 'Montserrat-Black.ttf'))
-    const words = [
-      { t0: 0.2, t1: 0.6, text: 'this' },
-      { t0: 0.6, t1: 1.0, text: 'is' },
-      { t0: 1.0, t1: 1.6, text: "Zoë's" },
-      { t0: 1.8, t1: 2.4, text: 'clip!' }
-    ]
     writeFileSync(join(dir, 'vertical.ass'), buildAss(words, defaultAssStyle('vertical', 0.66, true)))
     writeFileSync(join(dir, 'horizontal.ass'), buildAss(words, defaultAssStyle('horizontal', 0.85, true)))
   }, 120_000)
@@ -106,6 +107,18 @@ describe.skipIf(!hasFfmpeg)('render with FFmpeg', () => {
     const p = await probe(out)
     expect(p.audio).toMatchObject({ channels: 2 })
     expect(p.duration).toBeCloseTo(4, 0)
+  }, 120_000)
+
+  it.each(CAPTION_STYLES.map((s) => s.id))('renders the %s caption style', async (id) => {
+    const style = CAPTION_STYLES.find((s) => s.id === id)!
+    const out = join(dir, `style-${id}.mp4`)
+    const assPath = join(dir, `style-${id}.ass`)
+    writeFileSync(assPath, buildAss(words, defaultAssStyle('vertical', 0.7, true, style)))
+    const stderr = await render(spec({ assFile: `style-${id}.ass`, output: out }))
+    const p = await probe(out)
+    expect(p.video).toMatchObject({ width: 1080, height: 1920, codec: 'h264' })
+    expect(statSync(out).size).toBeGreaterThan(30_000)
+    expect(stderr).not.toMatch(/fontselect: (?:no|error)/i)
   }, 120_000)
 
   it('measures loudness for a two-pass export', async () => {

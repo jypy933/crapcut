@@ -4,8 +4,9 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { clipWords } from '@shared/captions'
+import { captionStyle } from '@shared/captionStyles'
 import type { Clip, ExportFormat, ExportItem, HardwareProfile, Layout } from '@shared/types'
-import { buildAss, CAPTION_FONT, defaultAssStyle } from '../core/ass'
+import { buildAss, defaultAssStyle } from '../core/ass'
 import { EtaEstimator } from '../core/eta'
 import { buildLoudnessMeasureArgs, buildRenderArgs, parseLoudnessMeasure, parseProgressSeconds, type AudioPlan, type EncoderId, type RenderSpec } from '../core/render'
 import { jobDir, type AppPaths } from '../paths'
@@ -198,12 +199,14 @@ export class Exporter {
     const work = join(dir, 'render', item.id)
     rmSync(work, { recursive: true, force: true })
     mkdirSync(join(work, 'fonts'), { recursive: true })
+    // Only Montserrat needs bundling; other preset fonts are already on Windows.
     copyFileSync(join(this.paths.resources, 'fonts', 'Montserrat-Black.ttf'), join(work, 'fonts', 'Montserrat-Black.ttf'))
     let assFile: string | null = null
     if (clip.captions.enabled) {
       const words = clipWords(clip.words, start, end)
       const y = item.format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1))
-      writeFileSync(join(work, 'captions.ass'), buildAss(words, { ...defaultAssStyle(item.format, y, clip.captions.uppercase), fontName: CAPTION_FONT }))
+      const style = captionStyle(clip.captions.styleId)
+      writeFileSync(join(work, 'captions.ass'), buildAss(words, defaultAssStyle(item.format, y, clip.captions.uppercase, style)))
       assFile = 'captions.ass'
     }
 
