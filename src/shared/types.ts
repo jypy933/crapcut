@@ -215,6 +215,22 @@ export interface AppInfo {
   update: UpdateState
 }
 
+/** The one channel CrapCut watches for new VODs. */
+export interface ChannelWatch {
+  channel: string
+  /** Epoch ms; only VODs published after this are queued. */
+  enabledAt: number
+}
+
+export interface ChannelWatchStatus {
+  channel: string | null
+  enabledAt: number | null
+  checking: boolean
+  lastCheckedAt: number | null
+  /** One plain sentence, from the most recent check. */
+  lastError: string | null
+}
+
 export type UpdateState =
   | { kind: 'idle' }
   | { kind: 'checking' }
