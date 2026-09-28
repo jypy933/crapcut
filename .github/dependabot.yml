@@ -5,6 +5,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # electron-vite 5 supports Vite up to 7; move together when it catches up.
+      - dependency-name: vite
+        update-types: [version-update:semver-major]
+      - dependency-name: '@vitejs/plugin-react'
+        update-types: [version-update:semver-major]
+      - dependency-name: electron
+        update-types: [version-update:semver-major]
     groups:
       dev-dependencies:
         dependency-type: development
