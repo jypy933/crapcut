@@ -11,6 +11,7 @@ import type { Clip, HardwareProfile, JobSummary, MomentSource, Range, StepId, Vo
 import { DEFAULT_CAPTION_STYLE, isCaptionStyleId } from '@shared/captionStyles'
 import { chatIn } from '@shared/chatOverlay'
 import { needsClipCaptionPass } from '@shared/hardware'
+import { collapseLoops } from '@shared/transcriptLoops'
 import { isStretchedWord, repairWordTimings } from '@shared/wordTiming'
 import { bestLag, envelope, pcm16ToFloat } from '../core/align'
 import { parseChatLog } from '../core/chat'
@@ -38,6 +39,7 @@ import { pickStructure } from '../core/structurePick'
 import { pickStructureWithLlm, STRUCTURE_SYSTEM_PROMPT } from '../core/structureLlm'
 import { computeSignals } from '../core/structureSignals'
 import { deriveTasteAdjustments, type TasteAdjustments } from '../core/taste'
+import { assessSpeech, findBadTranscriptRanges, judgeSpeech } from '../core/transcriptQuality'
 import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
 import type { AppPaths } from '../paths'
 import type { Store } from '../store'
@@ -349,25 +351,51 @@ async function moments(ctx: StepContext): Promise<void> {
   const messages = parseChatLog(chatText)
   const loudness = parseLoudnessLog(loudText, duration)
   const words = transcript.words
+  // Whisper sometimes loops on silence or music ("Tired Tired Tired", a
+  // sentence repeated for a minute straight): find where that happened so
+  // those stretches never drive a candidate or end up in a title, and use a
+  // version with the loops collapsed to one occurrence for everything a
+  // human or the language model reads.
+  const badTranscript = findBadTranscriptRanges(words)
+  const cleanWords = collapseLoops(words)
   // Ceiling only: the finder never fills up to this, it just never goes past
   // it. How many clips actually come out is decided by quality, below.
   const ceiling = maxClipCount(duration)
   // How his past accepts/rejects and trims have nudged the defaults; identical
   // to today's behaviour until there is real history to learn from.
   const adjustments = deriveTasteAdjustments(ctx.store.getTasteHistory())
-  const candidates = findCandidates({ durationSec: duration, messages, loudness, words, muted }, { limit: Math.min(40, ceiling * 2) }, adjustments)
+  const rawCandidates = findCandidates({ durationSec: duration, messages, loudness, words, muted }, { limit: Math.min(40, ceiling * 2) }, adjustments)
+  // Drop candidates whose transcript is mostly hallucinated or empty, unless
+  // chat or loudness alone are strong enough that something real clearly
+  // happened -- then the candidate is kept but marked, so its title comes
+  // from chat and reaction, not from looped nonsense.
+  const candidates: Candidate[] = []
+  let droppedForSpeech = 0
+  for (const cand of rawCandidates) {
+    // Judged over the same excerpt the language model would see (wider than
+    // the eventual clip window), since that is what a title would be drawn
+    // from and what decides whether this is worth asking the model at all.
+    const assessment = assessSpeech(excerptRange(cand, duration), words, badTranscript)
+    const verdict = judgeSpeech(assessment, cand.chatZ, cand.audioZ)
+    if (verdict === 'drop') {
+      droppedForSpeech++
+      continue
+    }
+    candidates.push(verdict === 'keep_no_speech' ? { ...cand, reasons: [...cand.reasons, 'No speech'] } : cand)
+  }
+  if (droppedForSpeech > 0) ctx.log.info(`dropped ${droppedForSpeech} candidates with no reliable speech`)
   ctx.log.info(`${messages.length} chat messages, ${candidates.length} candidates, ceiling ${ceiling}`)
 
   const llm = await openLlm(ctx)
   try {
     let refined: (Refined | null)[] = candidates.map(() => null)
     let scanned: Pick[] = []
-    if (llm) refined = await refineCandidates(ctx, llm, meta, candidates, messages, words, duration)
+    if (llm) refined = await refineCandidates(ctx, llm, meta, candidates, messages, cleanWords, duration)
     const keptCount = candidates.filter((_, i) => refined[i]?.keep !== false).length
     // A quiet chat gives too few moments: let the model read the transcript too.
     if (llm && keptCount < ceiling) {
       const avoid = [...muted, ...candidates.map((c) => c.window)]
-      scanned = await scanTranscript(ctx, llm, meta, words, avoid, duration, adjustments)
+      scanned = await scanTranscript(ctx, llm, meta, cleanWords, badTranscript, avoid, duration, adjustments)
     }
 
     let picks: Pick[] = candidates.map((cand, i) => {
@@ -379,7 +407,7 @@ async function moments(ctx: StepContext): Promise<void> {
         cand,
         refined: r,
         window,
-        title: r?.title ?? fallbackTitle(words, window),
+        title: r?.title ?? fallbackTitle(cleanWords, window),
         score,
         strength: cand.strength * ratingFactor(rating),
         chatZ: cand.chatZ,
@@ -563,6 +591,7 @@ async function scanTranscript(
   llm: LlmSession,
   meta: JobMeta,
   words: Word[],
+  badTranscript: Range[],
   avoid: Range[],
   duration: number,
   adjustments: TasteAdjustments
@@ -576,6 +605,10 @@ async function scanTranscript(
     throwIfAborted(ctx.signal)
     ctx.progress(0.6 + (0.4 * i) / windows.length, 'Reading the transcript')
     const range = windows[i]!
+    // A scanned window has no chat or loudness backing it up, so unlike a
+    // found candidate it is never kept anyway once it looks hallucinated --
+    // skip it before it ever reaches the model.
+    if (assessSpeech(range, words, badTranscript).noSpeech) continue
     const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
     const chapter = meta.chapters.find((ch) => range.start >= ch.start && range.start < ch.end)?.title ?? null
     try {
