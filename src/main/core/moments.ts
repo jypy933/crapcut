@@ -4,7 +4,7 @@
 import type { Range, Word } from '@shared/types'
 import type { ChatMessage } from './chat'
 import { overlapSeconds } from './media'
-import { chatSeries, findPeaks, maxIn, movingAverage, robustZ, type Series } from './signals'
+import { chatterBurstSeries, distinctChatters, findPeaks, maxIn, movingAverage, robustZ, type Series } from './signals'
 import { DEFAULT_TASTE_ADJUSTMENTS, type TasteAdjustments } from './taste'
 import { wordsIn } from './transcript'
 
@@ -45,13 +45,38 @@ export function edgeSkip(durationSec: number): { start: number; end: number } {
   return { start: Math.min(120, Math.max(15, durationSec * 0.05)), end: Math.min(60, Math.max(10, durationSec * 0.03)) }
 }
 
-/** About one clip per 20 minutes of stream, between 3 and 20. */
-export function targetClipCount(durationSec: number): number {
-  return Math.max(3, Math.min(20, Math.round(durationSec / 1200)))
+/** Always keep at least this many clips when that many candidates exist at all. */
+export const MIN_CLIPS = 3
+
+/**
+ * The most clips a job will ever produce, so a great stream does not
+ * overwhelm review: about one clip per 20 minutes of stream, capped at 20.
+ * The actual count is decided by `selectByQuality`, which rarely reaches
+ * this ceiling; it exists only to keep the review list manageable.
+ */
+export function maxClipCount(durationSec: number): number {
+  return Math.max(MIN_CLIPS, Math.min(20, Math.round(durationSec / 1200)))
 }
 
 const LAUGH = /\b(kekw|kekl|lul|lulw|omegalul|lmao+|lol+|icant|pepelaugh|xd+|mdr+|ptdr+|haha+)\b|😂|🤣|💀/i
 const HYPE = /\b(pog\w*|poggers|holy|no ?way|lets ?go+|clip|clutch|insane|w+)\b/i
+
+/**
+ * Floor under the chat z-score's scale: a burst summing to less than this
+ * many weighted-distinct-chatter units never counts as more than a mild
+ * blip, even in a dead-quiet chat where the rolling median and spread are
+ * both zero. Without it, one or two ordinary reactions in an otherwise
+ * silent window would divide by almost nothing and look enormous.
+ */
+const CHATTER_Z_FLOOR = 3
+/** A confirmed chat reaction's z-score is added on top of this base, see below. */
+const CHAT_BASE = 1.5
+/** Loudness peaks below this are not candidates at all. */
+const LOUD_MIN_Z = 3
+/** Strength of a loud-only moment right at the detection threshold. */
+const LOUD_BASE = 1.2
+/** How fast a loud-only moment's strength grows past the threshold (log-compressed, see below). */
+const LOUD_SCALE = 1.3
 
 function reasonsFor(messages: ChatMessage[], from: number, to: number): string[] {
   let n = 0
@@ -70,19 +95,19 @@ function reasonsFor(messages: ChatMessage[], from: number, to: number): string[]
   return out
 }
 
-function uniqueChatters(messages: ChatMessage[], from: number, to: number): number {
-  const set = new Set<string>()
-  for (const m of messages) {
-    if (m.t < from) continue
-    if (m.t > to) break
-    set.add(m.user.toLowerCase())
-  }
-  return set.size
-}
-
 /** Maps an unbounded strength to 0..1. */
 export function strengthToScore(strength: number): number {
   return Math.max(0, Math.min(1, 1 - Math.exp(-Math.max(0, strength) / 6)))
+}
+
+/**
+ * Inverse of `strengthToScore`, for a caller that only has a bounded 0..1
+ * signal (the transcript scan gives a fixed nominal strength, not a z-score)
+ * and needs a comparable raw strength to rank and quality-gate alongside
+ * chat- and audio-backed candidates.
+ */
+export function scoreToStrength(score: number): number {
+  return -6 * Math.log(1 - Math.max(0, Math.min(0.999999, score)))
 }
 
 /**
@@ -142,7 +167,12 @@ export function findCandidates(inputs: MomentInputs, opts: FindOptions, adjustme
   const messages = [...inputs.messages].sort((a, b) => a.t - b.t)
   const n = Math.max(1, Math.ceil(durationSec))
 
-  const chatZ: Series = robustZ(movingAverage(chatSeries(messages, durationSec), 8), 600, 0.2)
+  // How many different chatters reacted in a rolling ~20 s window, not raw
+  // message counts: a small, slow chat can show a real reaction as just a
+  // handful of different regulars, which per-second message counts barely
+  // move; a big, fast chat is judged against its own much busier normal, so
+  // the same handful means nothing there.
+  const chatZ: Series = robustZ(chatterBurstSeries(messages, durationSec), 600, CHATTER_Z_FLOOR)
   let audioZ: Series = new Float64Array(n)
   if (loudness && loudness.length > 0) {
     // Ignore silence (muted/AFK) when judging what "normal loudness" is.
@@ -168,20 +198,37 @@ export function findCandidates(inputs: MomentInputs, opts: FindOptions, adjustme
     if (chatPeaks.filter((p) => inside(p.t)).length >= opts.limit / 2) break
     chatPeaks = findPeaks(chatZ, minZ, 45)
   }
+  // A handful of different people reacting together is real even in a quiet
+  // chat; this is a sanity floor, not the main filter -- the z-score above
+  // already judges the burst against this stream's own normal, so in a big
+  // fast chat it takes far more than 3 people to register as a peak at all.
+  const CHATTER_GATE_SEC = 10
   for (const p of chatPeaks) {
     if (!inside(p.t)) continue
-    if (uniqueChatters(messages, p.onset - 2, p.t + 2) < 3) continue
+    if (distinctChatters(messages, p.onset - CHATTER_GATE_SEC, p.t + CHATTER_GATE_SEC) < 3) continue
     const az = Math.max(0, maxIn(audioZ, p.onset - CHAT_DELAY_SEC - 15, p.t - CHAT_DELAY_SEC + 5))
     const reasons = ['Chat spike', ...reasonsFor(messages, p.onset - 1, p.t + 4)]
     if (az >= 2.5) reasons.push('loud')
-    add(p.t, p.onset, adjustments.chatWeight * p.z + 0.5 * adjustments.audioWeight * Math.min(az, 6), p.z, az, reasons)
+    // A confirmed chat reaction starts from a solid base before its own
+    // z-score is added, so it is not automatically buried under a loud but
+    // unconfirmed moment: loudness alone can reach a far higher z than chat
+    // ever does (an explosion dwarfs any crowd reaction after normalising),
+    // so without this base a real reaction that chat calmly agreed on would
+    // rank below background game noise.
+    add(p.t, p.onset, adjustments.chatWeight * (CHAT_BASE + p.z) + 0.5 * adjustments.audioWeight * Math.min(az, 6), p.z, az, reasons)
   }
 
-  // Loud moments chat did not react to (useful for small chats).
-  for (const p of findPeaks(audioZ, 3, 60)) {
+  // Loud moments chat did not react to (useful for small chats). Loudness has
+  // no natural ceiling -- a big explosion can dwarf anything else in the
+  // stream -- so its contribution is compressed with a log: a moment several
+  // times louder than the threshold clearly outranks one that just clears
+  // it, but it cannot grow without bound and swamp every chat-backed
+  // candidate just for being extremely loud.
+  for (const p of findPeaks(audioZ, LOUD_MIN_Z, 60)) {
     if (!inside(p.t)) continue
     if (raw.some((c) => Math.abs(c.event - p.t) < 30)) continue
-    add(p.t, p.onset, 0.6 * adjustments.audioWeight * p.z, 0, p.z, ['Loud moment'])
+    const loud = LOUD_BASE + LOUD_SCALE * Math.log1p(Math.max(0, p.z - LOUD_MIN_Z))
+    add(p.t, p.onset, adjustments.audioWeight * loud, 0, p.z, ['Loud moment'])
   }
 
   return selectNonOverlapping(
@@ -200,6 +247,70 @@ export function selectNonOverlapping<T extends { window: Range; strength: number
     out.push(c)
   }
   return out
+}
+
+function median(sorted: number[]): number {
+  if (sorted.length === 0) return 0
+  const mid = sorted.length >> 1
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2
+}
+
+/**
+ * How far above its own group's typical strength (in robust "spreads") a
+ * loud-only candidate must be to clear the bar. Computed the same way as the
+ * time-series z-scores above, but over the strengths of one stream's own
+ * loud-only candidates, so it adapts to how loud and how spiky this
+ * particular stream's audio is instead of using one fixed number for every
+ * stream.
+ */
+const LOUD_QUALITY_Z = 0.8
+
+/** Lowest a loud-only group's bar is allowed to be relative to its median. */
+const LOUD_QUALITY_FLOOR = 0.15
+
+/**
+ * How much above its own group's median a candidate needs to be, in that
+ * group's own robust spread, floored so a group where every candidate is
+ * about equally strong does not become impossible to clear.
+ */
+function groupBar(strengths: number[], z: number): number {
+  if (strengths.length === 0) return Infinity
+  const sorted = [...strengths].sort((a, b) => a - b)
+  const med = median(sorted)
+  const mad = median(sorted.map((s) => Math.abs(s - med)))
+  const scale = Math.max(1.4826 * mad, LOUD_QUALITY_FLOOR * med)
+  return med + z * scale
+}
+
+/**
+ * Picks clips by quality instead of always filling to a fixed count. Chat-
+ * and transcript-backed candidates already passed their own selective
+ * checks (a real burst of different chatters, or the model's own rating) and
+ * are always kept. Loud-only candidates get an extra bar relative to this
+ * stream's *other* loud-only candidates -- audio has no natural ceiling and
+ * (especially in a loud game) can turn up many technically-above-baseline
+ * moments that are merely loud rather than notable, so only the ones that
+ * stand out even among those are kept. Never fewer than `min` clips while
+ * that many candidates exist at all, never more than `max`.
+ */
+export function selectByQuality<T extends { window: Range; strength: number; chatZ: number; audioZ: number }>(
+  items: T[],
+  min: number,
+  max: number
+): T[] {
+  if (items.length === 0) return []
+  const ranked = selectNonOverlapping(items, Math.max(max, items.length))
+  // Loud-only: no chat confirmation and only found because of loudness.
+  // Chat-backed and transcript-only candidates (chatZ and audioZ both 0)
+  // already passed their own selective checks and skip this bar entirely.
+  const isLoudOnly = (c: T): boolean => c.chatZ <= 0 && c.audioZ > 0
+  const bar = groupBar(
+    ranked.filter(isLoudOnly).map((c) => c.strength),
+    LOUD_QUALITY_Z
+  )
+  let kept = ranked.filter((c) => !isLoudOnly(c) || c.strength >= bar)
+  if (kept.length < Math.min(min, ranked.length)) kept = ranked.slice(0, min)
+  return kept.slice(0, max)
 }
 
 /** A short title from the words of a clip, used when the LLM is unavailable. */

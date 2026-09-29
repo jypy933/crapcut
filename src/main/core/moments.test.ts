@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Word } from '@shared/types'
+import type { Range, Word } from '@shared/types'
 import type { ChatMessage } from './chat'
 import {
   CHAT_DELAY_SEC,
@@ -9,10 +9,13 @@ import {
   edgeSkip,
   fallbackTitle,
   findCandidates,
+  maxClipCount,
+  MIN_CLIPS,
+  scoreToStrength,
+  selectByQuality,
   selectNonOverlapping,
   snapWindow,
-  strengthToScore,
-  targetClipCount
+  strengthToScore
 } from './moments'
 import { DEFAULT_TASTE_ADJUSTMENTS, deriveTasteAdjustments } from './taste'
 
@@ -49,11 +52,11 @@ function speech(duration: number): Word[] {
   return out
 }
 
-describe('targetClipCount', () => {
+describe('maxClipCount', () => {
   it('scales with duration within limits', () => {
-    expect(targetClipCount(600)).toBe(3)
-    expect(targetClipCount(4 * 3600)).toBe(12)
-    expect(targetClipCount(20 * 3600)).toBe(20)
+    expect(maxClipCount(600)).toBe(MIN_CLIPS)
+    expect(maxClipCount(4 * 3600)).toBe(12)
+    expect(maxClipCount(20 * 3600)).toBe(20)
   })
 })
 
@@ -70,6 +73,17 @@ describe('strengthToScore', () => {
     expect(strengthToScore(-1)).toBe(0)
     expect(strengthToScore(3)).toBeLessThan(strengthToScore(9))
     expect(strengthToScore(1000)).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('scoreToStrength', () => {
+  it('inverts strengthToScore', () => {
+    for (const s of [0.5, 1.5, 4, 9]) expect(scoreToStrength(strengthToScore(s))).toBeCloseTo(s, 5)
+  })
+  it('clamps to a sane range', () => {
+    expect(scoreToStrength(0)).toBeCloseTo(0, 10)
+    expect(scoreToStrength(1)).toBeGreaterThan(0)
+    expect(Number.isFinite(scoreToStrength(1))).toBe(true)
   })
 })
 
@@ -178,6 +192,46 @@ describe('selectNonOverlapping', () => {
     ]
     expect(selectNonOverlapping(items, 5).map((i) => i.strength)).toEqual([5, 2])
     expect(selectNonOverlapping(items, 1)).toHaveLength(1)
+  })
+})
+
+describe('selectByQuality', () => {
+  function loud(strength: number, start: number): { window: Range; strength: number; chatZ: number; audioZ: number } {
+    return { window: { start, end: start + 20 }, strength, chatZ: 0, audioZ: strength }
+  }
+  function chatBacked(strength: number, start: number): { window: Range; strength: number; chatZ: number; audioZ: number } {
+    return { window: { start, end: start + 20 }, strength, chatZ: strength, audioZ: 0 }
+  }
+
+  it('returns nothing for no candidates', () => {
+    expect(selectByQuality([], 3, 10)).toEqual([])
+  })
+
+  it('never returns more than max', () => {
+    const many = Array.from({ length: 30 }, (_, i) => chatBacked(5 + i, i * 100))
+    expect(selectByQuality(many, 3, 10)).toHaveLength(10)
+  })
+
+  it('keeps at least min when that many candidates exist, even if all are weak', () => {
+    const weak = [loud(3.01, 0), loud(3, 100), loud(3.02, 200)]
+    expect(selectByQuality(weak, 3, 10)).toHaveLength(3)
+  })
+
+  it('keeps every chat-backed candidate regardless of the loud-only bar', () => {
+    const items = [chatBacked(2, 0), chatBacked(2.1, 100), chatBacked(1.9, 200), loud(9, 400)]
+    const chosen = selectByQuality(items, 3, 10)
+    expect(chosen.filter((c) => c.chatZ > 0)).toHaveLength(3)
+  })
+
+  it('keeps a loud-only candidate that stands out from this stream\'s other loud ones, drops the merely-loud rest', () => {
+    // A tight cluster of ordinary loud moments plus one clear outlier.
+    const items = [
+      ...Array.from({ length: 10 }, (_, i) => loud(3 + i * 0.02, i * 100)),
+      loud(20, 2000) // far louder than anything else this stream produced
+    ]
+    const chosen = selectByQuality(items, 3, 20)
+    expect(chosen.some((c) => c.strength === 20)).toBe(true)
+    expect(chosen.length).toBeLessThan(items.length)
   })
 })
 
