@@ -36,6 +36,7 @@ export const ClipPatchSchema = z
     status: z.enum(['pending', 'accepted', 'rejected']),
     words: z.array(WordSchema).max(5000),
     captions: z.object({ enabled: z.boolean(), y: unit, uppercase: z.boolean(), styleId: z.enum(CAPTION_STYLE_IDS) }).strict(),
+    chatOverlay: z.boolean(),
     audio: z.enum(AUDIO_MODES),
     layoutId: id.nullable(),
     formats: z.object({ vertical: z.boolean(), horizontal: z.boolean() }).strict()

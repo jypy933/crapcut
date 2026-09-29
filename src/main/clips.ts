@@ -12,6 +12,7 @@ export function applyClipPatch(clip: Clip, patch: ClipPatch, layoutExists: (id: 
   if (patch.title !== undefined) next.title = patch.title.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 100) || clip.title
   if (patch.status !== undefined) next.status = patch.status
   if (patch.captions !== undefined) next.captions = { ...patch.captions }
+  if (patch.chatOverlay !== undefined) next.chatOverlay = patch.chatOverlay
   if (patch.audio !== undefined) next.audio = patch.audio
   if (patch.formats !== undefined) next.formats = { ...patch.formats }
   if (patch.layoutId !== undefined) next.layoutId = patch.layoutId === null || layoutExists(patch.layoutId) ? patch.layoutId : clip.layoutId

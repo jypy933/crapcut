@@ -17,6 +17,8 @@ const fakeClip = (overrides: Partial<Clip> & { id: string }): Clip => ({
   status: 'accepted',
   words: [],
   captions: { enabled: true, y: 0.7, uppercase: true, styleId: 'clean' },
+  chatMessages: [],
+  chatOverlay: false,
   audio: 'original',
   musicPath: null,
   layoutId: null,
