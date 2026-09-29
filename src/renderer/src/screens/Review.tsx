@@ -1,11 +1,11 @@
-import { ArrowLeft, Check, Clapperboard, Crop, FolderOpen, Music, Pause, Play, RotateCcw, Smartphone, Monitor, X } from 'lucide-react'
+import { ArrowLeft, Check, Clapperboard, Crop, FolderOpen, Music, Pause, Play, RotateCcw, Smartphone, Monitor, Wand2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { editGroupText } from '@shared/captionEdit'
 import { clipWords, groupWords, type CaptionGroup } from '@shared/captions'
 import { CAPTION_STYLES } from '@shared/captionStyles'
 import { formatClock, formatEta, formatLength } from '@shared/format'
 import type { RenderFormat } from '@shared/layoutGeometry'
-import { AUDIO_MODE_LABELS, type AppInfo, type AudioMode, type BestOfItem, type Clip, type ExportItem, type Layout, type Range } from '@shared/types'
+import { AUDIO_MODE_LABELS, type AppInfo, type AudioMode, type AutoEditPreviewState, type BestOfItem, type Clip, type ExportItem, type Layout, type Range } from '@shared/types'
 import type { ClipPatch } from '@shared/ipc'
 import { repairWordTimings } from '@shared/wordTiming'
 import type { Route } from '../App'
@@ -15,6 +15,8 @@ import { Preview } from '../components/Preview'
 import { Timeline } from '../components/Timeline'
 import { Field, ProgressBar, Segmented, Spinner, Toggle } from '../components/ui'
 import { FALLBACK_LAYOUT } from '../lib/compose'
+
+const OFF_PREVIEW: AutoEditPreviewState = { clipId: '', status: 'off', version: null }
 
 export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void }): ReactNode {
   const [clips, setClips] = useState<Clip[] | null>(null)
@@ -29,6 +31,8 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
   const [editingLayout, setEditingLayout] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [tuned, setTuned] = useState(false)
+  const [stageTab, setStageTab] = useState<'editor' | 'autoEdit'>('editor')
+  const [previews, setPreviews] = useState<Record<string, AutoEditPreviewState>>({})
   const video = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
@@ -65,8 +69,21 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
     })
   })
 
+  useEvent('autoEditPreview:changed', (state) => {
+    setPreviews((m) => ({ ...m, [state.clipId]: state }))
+  })
+
   const clip = clips?.find((c) => c.id === selected) ?? null
   const layout = (clip?.layoutId && layouts.find((l) => l.id === clip.layoutId)) || FALLBACK_LAYOUT
+
+  // Asks main for the current auto-edit preview whenever the clip (a fresh
+  // object on every accepted edit) or the format changes; main debounces and
+  // caches, so calling this often -- including mid-drag on the trim handles
+  // -- is cheap.
+  useEffect(() => {
+    if (!clip || !clip.autoEdit) return
+    void call('clips:previewAutoEdit', clip.id, format).then((state) => setPreviews((m) => ({ ...m, [state.clipId]: state })))
+  }, [clip, format])
 
   const update = useCallback(async (id: string, patch: ClipPatch): Promise<void> => {
     // Optimistic update so the UI stays snappy; main returns the checked clip.
@@ -218,6 +235,16 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
               <div className="grow ellipsis" style={{ fontWeight: 600, fontSize: 14 }}>
                 {clip.title}
               </div>
+              <div style={{ width: 160 }}>
+                <Segmented<'editor' | 'autoEdit'>
+                  value={stageTab}
+                  onChange={setStageTab}
+                  options={[
+                    { value: 'editor', label: 'Editor' },
+                    { value: 'autoEdit', label: <><Wand2 size={13} /> Auto edit</> }
+                  ]}
+                />
+              </div>
               <div style={{ width: 200 }}>
                 <Segmented<RenderFormat>
                   value={format}
@@ -230,21 +257,25 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
               </div>
             </div>
             {clip.source ? (
-              <Preview
-                clip={clip}
-                src={api.clipUrl(jobId, clip.id)}
-                layout={layout}
-                format={format}
-                videoRef={video}
-                time={time}
-                onTime={setTime}
-                onPlaying={setPlaying}
-                onCaptionY={(y) => void update(clip.id, { captions: { ...clip.captions, y } })}
-              />
+              stageTab === 'editor' ? (
+                <Preview
+                  clip={clip}
+                  src={api.clipUrl(jobId, clip.id)}
+                  layout={layout}
+                  format={format}
+                  videoRef={video}
+                  time={time}
+                  onTime={setTime}
+                  onPlaying={setPlaying}
+                  onCaptionY={(y) => void update(clip.id, { captions: { ...clip.captions, y } })}
+                />
+              ) : (
+                <AutoEditPreviewPane jobId={jobId} clip={clip} state={previews[clip.id] ?? OFF_PREVIEW} />
+              )
             ) : (
               <div className="viewport muted">This clip's video has not been downloaded.</div>
             )}
-            {clip.source && (
+            {clip.source && stageTab === 'editor' && (
               <div className="transport">
                 <button type="button" className="btn icon" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>
                   {playing ? <Pause size={15} /> : <Play size={15} />}
@@ -308,6 +339,28 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
   )
 }
 
+/** The "Auto edit" tab: the cached preview of the clip's automatic re-edit, or a plain status while it is not ready. */
+function AutoEditPreviewPane({ jobId, clip, state }: { jobId: string; clip: Clip; state: AutoEditPreviewState }): ReactNode {
+  if (!clip.autoEdit) {
+    return <div className="viewport muted">Auto edit is off for this clip.</div>
+  }
+  if (state.status === 'error') {
+    return <div className="viewport muted">The auto edit preview could not be built.</div>
+  }
+  if (state.status !== 'ready' || !state.version) {
+    return (
+      <div className="viewport muted">
+        <Spinner size={18} />
+      </div>
+    )
+  }
+  return (
+    <div className="viewport">
+      <video key={state.version} className="autoedit-preview" src={api.previewUrl(jobId, clip.id, state.version)} controls autoPlay loop />
+    </div>
+  )
+}
+
 function Inspector({
   clip,
   layouts,
@@ -362,6 +415,10 @@ function Inspector({
           { value: 'rejected', label: <><X size={14} /> Skip</> }
         ]}
       />
+
+      <Field label="Auto edit" right={<Toggle on={clip.autoEdit} label="Auto edit" onChange={(autoEdit) => onUpdate({ autoEdit })} />}>
+        {null}
+      </Field>
 
       <Field label="Formats">
         <div className="row">
