@@ -40,9 +40,9 @@ either side stops the other. Clip videos download three at a time.
 | metadata | yt-dlp `-J`, audio playlist | `meta.json` (title, length, chapters, muted ranges) |
 | chat | TwitchDownloaderCLI | `chat.txt` |
 | audio | yt-dlp (audio only), FFmpeg | `audio.mp4`, `audio16k.wav` (temporary), `loudness.txt`, `muted.json` |
-| transcribe | whisper.cpp, 10-minute chunks cut at quiet seconds | `transcript/chunk-NNN.json` -> `transcript.json` |
+| transcribe | whisper.cpp (CUDA, Vulkan or CPU), 10-minute chunks cut at quiet seconds | `transcript/chunk-NNN.json` (with a `sharp` flag) -> `transcript.json` |
 | moments | `core/moments.ts` + llama-server | clips in SQLite, `moments.json` |
-| clip captions | whisper.cpp (CPU, large model), FFmpeg | sharpened `words` on each clip in SQLite |
+| clip captions | whisper.cpp (large model), FFmpeg | sharpened `words` on each clip in SQLite |
 | clips | yt-dlp `--download-sections` + audio alignment | `clips/<clip>.mp4` |
 
 ### Finding moments
@@ -101,6 +101,12 @@ range back out of the already-downloaded VOD audio and re-transcribes just
 that with the large model, which is easily affordable per clip; the result is
 offset back onto VOD time, repaired and replaces that clip's `words`. On
 NVIDIA the whole VOD already used the large model, so this step does nothing.
+On AMD (Vulkan) the large model also runs on the GPU for the whole VOD, and
+each chunk file records whether it did (`sharp`). If the GPU failed and some
+chunks were done on the CPU with the small model, only the clips that touch
+those chunks are re-transcribed (on the GPU if it is still working, otherwise
+on the CPU). A chunk file with no `sharp` flag, from a job started before it
+existed, counts as CPU.
 A clip is skipped if its captions were already hand-edited in Review (only
 possible on a job resumed from before this step existed), and a clip that
 fails re-transcription simply keeps its fast-pass words. Per-clip progress and
@@ -202,9 +208,14 @@ exporter's encoder choice.
 
 `tools/gpu.ts` reads the display adapters from the registry (and `nvidia-smi`
 on NVIDIA). whisper.cpp uses the CUDA build on NVIDIA (driver ≥ 452.39,
-≥ 3.5 GB VRAM) and the CPU build otherwise; if the GPU run fails it falls back
-to the CPU automatically. llama.cpp uses its Vulkan build (works on NVIDIA and
-AMD, CPU fallback included). Video encoding tries NVENC / AMF / QSV with a
+≥ 3.5 GB VRAM), a Vulkan build on AMD cards with >= 3.5 GB VRAM, and the CPU
+build otherwise; if the GPU run fails it falls back to the CPU automatically.
+whisper.cpp has no official Windows Vulkan build, so `whisper-vulkan` is built
+by this repo's CI ([whisper-vulkan.yml](../.github/workflows/whisper-vulkan.yml))
+from the pinned v1.9.4 source and published as a `tools-whisper-vulkan-*`
+prerelease, like the voice separator. On an RX 9060 XT the large model runs roughly
+10 to 30 times faster than real time there (the CPU small model manages about 4). llama.cpp uses its Vulkan build (works on
+NVIDIA and AMD, CPU fallback included). Video encoding tries NVENC / AMF / QSV with a
 one-second test encode and falls back to libx264.
 
 ## Setup and optional AI parts

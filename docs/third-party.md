@@ -15,8 +15,9 @@ pinned to the exact version, and checked against the SHA-256 in
 | TwitchDownloaderCLI | 1.56.5 | MIT | https://github.com/lay295/TwitchDownloader/releases/tag/1.56.5 |
 | whisper.cpp (CPU build) | 1.9.4 (b5130) | MIT | https://github.com/ggml-org/whisper.cpp/releases/tag/b5130 |
 | whisper.cpp (CUDA 11.8 build, NVIDIA only; includes NVIDIA CUDA runtime under the NVIDIA CUDA EULA) | 1.9.4 (b5130) | MIT | https://github.com/ggml-org/whisper.cpp/releases/tag/b5130 |
+| whisper.cpp (Vulkan build, AMD only), built by this repo's CI ([whisper-vulkan.yml](../.github/workflows/whisper-vulkan.yml)) from the v1.9.4 source | 1.9.4 (tools-whisper-vulkan-1) | MIT | https://github.com/jypy933/crapcut/releases/tag/tools-whisper-vulkan-1 |
 | llama.cpp (Vulkan build) | b11236 | MIT | https://github.com/ggml-org/llama.cpp/releases/tag/b11236 |
-| Whisper large-v3-turbo and small (both q8_0; large transcribes the whole VOD on NVIDIA, small transcribes it on the CPU with large re-run on the kept clips only) | ggml | MIT (OpenAI Whisper) | https://huggingface.co/ggerganov/whisper.cpp |
+| Whisper large-v3-turbo and small (both q8_0; large transcribes the whole VOD on NVIDIA and AMD, small transcribes it on the CPU with large re-run on the kept clips only) | ggml | MIT (OpenAI Whisper) | https://huggingface.co/ggerganov/whisper.cpp |
 | Silero VAD | 6.2.0 | MIT | https://huggingface.co/ggml-org/whisper-vad |
 | Qwen3.5 9B (Q4_K_M, unsloth GGUF build; no official GGUF from the Qwen org yet), or Ministral 3 3B Instruct 2512 (Q4_K_M) on smaller GPUs | Q4_K_M | Apache-2.0 | https://huggingface.co/Qwen/Qwen3.5-9B (weights), https://huggingface.co/unsloth/Qwen3.5-9B-GGUF (quantization); https://huggingface.co/mistralai (3B) |
 | Voice separator: CrapCut's driver on demucs.cpp (includes Eigen, MPL-2.0, and libnyquist, BSD-2-Clause), built by this repo's CI ([separator.yml](../.github/workflows/separator.yml)) | tools-separator-1 | MIT | https://github.com/jypy933/crapcut/releases/tag/tools-separator-1 |
