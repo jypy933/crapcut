@@ -12,6 +12,7 @@ import type { ToolRegistry } from '../tools/registry'
 import { UserError, isCancelled, userMessage } from '../util/errors'
 import { moveFile } from '../util/fsx'
 import { logger } from '../util/log'
+import { ensureClipNormalized } from './clipNormalize'
 import { DEFAULT_LAYOUT, renderClipToFile, type ClipRenderDeps } from './clipRender'
 import type { GpuLock } from './gpuLock'
 import { loadMeta } from './steps'
@@ -217,8 +218,9 @@ export class Exporter {
   }
 
   private async render(item: ExportItem, signal: AbortSignal, onProgress: (f: number, eta: number | null) => void): Promise<string> {
-    const clip = this.store.clip(item.clipId)
-    if (!clip) throw new UserError('That clip no longer exists.', { retryable: false })
+    const found = this.store.clip(item.clipId)
+    if (!found) throw new UserError('That clip no longer exists.', { retryable: false })
+    const clip = await ensureClipNormalized(this.store, this.paths, found)
     const dir = jobDir(this.paths, item.jobId)
     const meta = await loadMeta(dir)
 

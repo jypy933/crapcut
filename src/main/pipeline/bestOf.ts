@@ -16,6 +16,7 @@ import type { ToolRegistry } from '../tools/registry'
 import { isCancelled, UserError, userMessage } from '../util/errors'
 import { moveFile } from '../util/fsx'
 import { logger } from '../util/log'
+import { ensureClipsNormalized } from './clipNormalize'
 import { safeFileName, type Exporter } from './exporter'
 import type { GpuLock } from './gpuLock'
 import { probeMedia } from './media'
@@ -160,7 +161,7 @@ export class BestOfBuilder {
   }
 
   private async build(jobId: string, id: string, signal: AbortSignal, onProgress: (f: number, eta: number | null) => void): Promise<string> {
-    const kept = keptClipsInOrder(this.store.clips(jobId))
+    const kept = await ensureClipsNormalized(this.store, this.paths, keptClipsInOrder(this.store.clips(jobId)))
     if (kept.length === 0) throw new UserError('Keep at least one clip first.', { retryable: false })
 
     const dir = jobDir(this.paths, jobId)
