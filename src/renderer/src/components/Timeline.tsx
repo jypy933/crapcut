@@ -47,9 +47,16 @@ export function Timeline({ bounds, value, time, words, onSeek, onChange }: Props
 
   return (
     <div className="timeline" ref={el} onPointerDown={(e) => onSeek(timeAt(e.clientX))} role="slider" aria-label="Clip cut" aria-valuemin={bounds.start} aria-valuemax={bounds.end} aria-valuenow={time}>
-      {words.map((w, i) => (
-        <div key={i} className="words" style={{ left: pct(w.t0), width: `${(Math.max(0.05, w.t1 - w.t0) / span) * 100}%` }} />
-      ))}
+      {words
+        .filter((w) => w.t1 > bounds.start && w.t0 < bounds.end)
+        .map((w, i) => {
+          // Clamp to the bar's own bounds first: a word can run past either
+          // end (stretched timing, or a clip range wider than its source),
+          // and nothing should draw outside the bar.
+          const left = Math.max(bounds.start, w.t0)
+          const right = Math.min(bounds.end, w.t1)
+          return <div key={i} className="words" style={{ left: pct(left), width: `${(Math.max(0.05, right - left) / span) * 100}%` }} />
+        })}
       <div className="sel" style={{ left: pct(cur.start), width: `calc(${pct(cur.end)} - ${pct(cur.start)})` }} />
       <div className="handle" style={{ left: pct(cur.start) }} onPointerDown={(e) => drag('start', e)} title="Drag to change the start" />
       <div className="handle" style={{ left: pct(cur.end) }} onPointerDown={(e) => drag('end', e)} title="Drag to change the end" />

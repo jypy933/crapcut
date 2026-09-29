@@ -8,6 +8,7 @@ import { join, relative } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Clip, HardwareProfile, JobSummary, MomentSource, Range, StepId, VodInfo, Word } from '@shared/types'
 import { DEFAULT_CAPTION_STYLE, isCaptionStyleId } from '@shared/captionStyles'
+import { isStretchedWord, repairWordTimings } from '@shared/wordTiming'
 import { bestLag, envelope, pcm16ToFloat } from '../core/align'
 import { parseChatLog } from '../core/chat'
 import {
@@ -26,7 +27,7 @@ import {
 import { mergeRanges, parseLoudnessLog } from '../core/media'
 import { fallbackTitle, findCandidates, selectNonOverlapping, targetClipCount, type Candidate } from '../core/moments'
 import { deriveTasteAdjustments, type TasteAdjustments } from '../core/taste'
-import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
+import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
 import type { AppPaths } from '../paths'
 import type { Store } from '../store'
 import { nvidiaFreeVramMb } from '../tools/gpu'
@@ -248,7 +249,20 @@ async function transcribe(ctx: StepContext): Promise<void> {
         language = parsed.language
         writeFileSync(langFile, language)
       }
-      const placed = placeChunkWords(parsed.words, chunk)
+      let words = parsed.words
+      if (words.some((w) => isStretchedWord(w))) {
+        // The chunk's own WAV is still on disk (chunk-relative time, matching
+        // whisper's words): find where each stretched word's speech really is.
+        try {
+          const pcm = await extractPcm(ffmpeg, wav, 0, chunk.end - chunk.start, ctx.signal)
+          const env = envelope(pcm16ToFloat(pcm), 8000)
+          words = repairChunkWordTimings(words, env, 0.01)
+        } catch (err) {
+          if (isCancelled(err)) throw err
+          ctx.log.warn(`${name}: could not read a voice envelope for stretched words`, err)
+        }
+      }
+      const placed = placeChunkWords(words, chunk)
       if (placed.dropped > 0) ctx.log.warn(`${name}: dropped ${placed.dropped} of ${parsed.words.length} words timed outside the chunk`)
       await writeJsonAtomic(done, { v: CHUNK_FORMAT, range: chunk, words: packWords(placed.words) })
       rmSync(`${outBase}.json`, { force: true })
@@ -264,7 +278,9 @@ async function transcribe(ctx: StepContext): Promise<void> {
       return { range: c, words: unpackWords(j.words) }
     })
   )
-  const words = mergeChunks(parts)
+  // Envelope repair runs per chunk above; anything it could not place (no
+  // audio, or too wide a match) gets a last pass with the text heuristic.
+  const words = repairWordTimings(mergeChunks(parts))
   const out: TranscriptFile = { language, words: packWords(words) }
   await writeJsonAtomic(join(ctx.dir, 'transcript.json'), out)
   // The 16 kHz copy is only needed for transcription (about 115 MB per hour).
@@ -274,7 +290,9 @@ async function transcribe(ctx: StepContext): Promise<void> {
 
 export async function loadWords(dir: string): Promise<{ language: string | null; words: Word[] }> {
   const t = await readJson<TranscriptFile>(join(dir, 'transcript.json'))
-  return { language: t.language, words: unpackWords(t.words) }
+  // Idempotent: a transcript written before this fix gets repaired here too,
+  // so moments (which snaps cuts to pauses between words) sees them fixed.
+  return { language: t.language, words: repairWordTimings(unpackWords(t.words)) }
 }
 
 // ---------------------------------------------------------------- moments

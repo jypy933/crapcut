@@ -7,6 +7,7 @@ import { formatClock, formatEta, formatLength } from '@shared/format'
 import type { RenderFormat } from '@shared/layoutGeometry'
 import { AUDIO_MODE_LABELS, type AppInfo, type AudioMode, type BestOfItem, type Clip, type ExportItem, type Layout, type Range } from '@shared/types'
 import type { ClipPatch } from '@shared/ipc'
+import { repairWordTimings } from '@shared/wordTiming'
 import type { Route } from '../App'
 import { api, call, errorText, useEvent } from '../api'
 import { LayoutEditor } from '../components/LayoutEditor'
@@ -330,7 +331,11 @@ function Inspector({
 }): ReactNode {
   const [title, setTitle] = useState(clip.title)
   useEffect(() => setTitle(clip.title), [clip.id, clip.title])
-  const groups = useMemo(() => groupWords(clipWords(clip.words, clip.start, clip.end)), [clip.words, clip.start, clip.end])
+  // Repaired once and reused for both the groups shown here and the words
+  // passed to caption editing, so the two agree on exact timings (`clipWords`
+  // repairs internally too, but idempotently, so this stays in sync with it).
+  const words = useMemo(() => repairWordTimings(clip.words), [clip.words])
+  const groups = useMemo(() => groupWords(clipWords(words, clip.start, clip.end)), [words, clip.start, clip.end])
   const edited = clip.start !== clip.suggested.start || clip.end !== clip.suggested.end
 
   return (
@@ -408,7 +413,7 @@ function Inspector({
               <Toggle on={clip.captions.uppercase} label="Uppercase" onChange={(uppercase) => onUpdate({ captions: { ...clip.captions, uppercase } })} />
               UPPERCASE
             </label>
-            <CaptionLines clip={clip} groups={groups} time={time} onSeek={onSeek} onWords={(words) => onUpdate({ words })} />
+            <CaptionLines clip={clip} words={words} groups={groups} time={time} onSeek={onSeek} onWords={(newWords) => onUpdate({ words: newWords })} />
             <div className="small faint">Drag the captions on the video to move them.</div>
           </>
         )}
@@ -450,7 +455,22 @@ function Inspector({
   )
 }
 
-function CaptionLines({ clip, groups, time, onSeek, onWords }: { clip: Clip; groups: CaptionGroup[]; time: number; onSeek: (t: number) => void; onWords: (w: Clip['words']) => void }): ReactNode {
+function CaptionLines({
+  clip,
+  words,
+  groups,
+  time,
+  onSeek,
+  onWords
+}: {
+  clip: Clip
+  /** `clip.words`, already repaired: matches the (also repaired) words inside `groups` exactly. */
+  words: Clip['words']
+  groups: CaptionGroup[]
+  time: number
+  onSeek: (t: number) => void
+  onWords: (w: Clip['words']) => void
+}): ReactNode {
   const rel = time - clip.start
   return (
     <div className="caption-lines">
@@ -464,7 +484,7 @@ function CaptionLines({ clip, groups, time, onSeek, onWords }: { clip: Clip; gro
           onText={(text) => {
             // Groups are clip-relative; edit in VOD time.
             const vodGroup = { ...g, start: g.start + clip.start, end: g.end + clip.start, words: g.words.map((w) => ({ ...w, t0: w.t0 + clip.start, t1: w.t1 + clip.start })) }
-            onWords(editGroupText(clip.words, vodGroup, text))
+            onWords(editGroupText(words, vodGroup, text))
           }}
         />
       ))}

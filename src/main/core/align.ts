@@ -66,3 +66,70 @@ export function pcm16ToFloat(buf: Buffer): Float32Array {
   for (let i = 0; i < n; i++) out[i] = buf.readInt16LE(i * 2) / 32768
   return out
 }
+
+export interface EnergySpan {
+  t0: number
+  t1: number
+}
+
+/**
+ * Finds where the voice actually is inside [spanStart, spanEnd) of a fine
+ * loudness envelope (see `envelope`), for a whisper word whose timing
+ * stretched across a silence. Short dips below the noise floor (a stop
+ * consonant, a breath) are bridged so one word is not split in two. Returns
+ * null when the span holds no clear speech above its own surroundings, so
+ * the caller can fall back to the text heuristic.
+ */
+export function locateWordEnergy(env: Float32Array, frameSec: number, spanStart: number, spanEnd: number, bridgeSec = 0.12): EnergySpan | null {
+  const i0 = Math.max(0, Math.floor(spanStart / frameSec))
+  const i1 = Math.min(env.length, Math.ceil(spanEnd / frameSec))
+  const n = i1 - i0
+  if (n < 1) return null
+  const frames = env.subarray(i0, i1)
+
+  const sorted = Float32Array.from(frames).sort()
+  const floor = sorted[Math.floor(sorted.length * 0.25)] ?? 0
+  const threshold = Math.max(floor * 2, floor + 1e-4)
+  const bridgeFrames = Math.max(1, Math.round(bridgeSec / frameSec))
+
+  const active = new Uint8Array(n)
+  for (let i = 0; i < n; i++) active[i] = frames[i]! > threshold ? 1 : 0
+  // Bridge short silent gaps that sit between two active stretches.
+  let i = 0
+  while (i < n) {
+    if (active[i]) {
+      i++
+      continue
+    }
+    let j = i
+    while (j < n && !active[j]) j++
+    if (i > 0 && j < n && j - i <= bridgeFrames) for (let k = i; k < j; k++) active[k] = 1
+    i = j
+  }
+
+  // The loudest contiguous active run is the real word.
+  let bestStart = -1
+  let bestEnd = -1
+  let bestSum = -Infinity
+  i = 0
+  while (i < n) {
+    if (!active[i]) {
+      i++
+      continue
+    }
+    let j = i
+    let sum = 0
+    while (j < n && active[j]) {
+      sum += frames[j]!
+      j++
+    }
+    if (sum > bestSum) {
+      bestSum = sum
+      bestStart = i
+      bestEnd = j
+    }
+    i = j
+  }
+  if (bestStart < 0) return null
+  return { t0: spanStart + bestStart * frameSec, t1: spanStart + bestEnd * frameSec }
+}

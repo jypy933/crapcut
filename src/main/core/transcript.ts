@@ -2,6 +2,8 @@
 // reading whisper.cpp's JSON output and cleaning up the word list.
 
 import type { Range, Word } from '@shared/types'
+import { DEFAULT_WORD_TIMING, isStretchedWord, maxPlausibleDuration, type WordTimingOptions } from '@shared/wordTiming'
+import { locateWordEnergy } from './align'
 
 /**
  * Splits [0, duration) into chunks of about `chunkSec`, moving each cut to the
@@ -75,6 +77,27 @@ export function parseWhisperJson(json: unknown): { language: string | null; word
     words.push({ t0, t1, text })
   }
   return { language, words: tidyWords(words) }
+}
+
+/**
+ * Repairs a chunk's stretched words using its own voice-energy envelope
+ * (both the words and the envelope are relative to the chunk's own audio, so
+ * this runs before `placeChunkWords` moves them onto the VOD timeline). A
+ * word is left alone when its span holds no clear, separate burst of speech,
+ * or when the match it found is implausibly wide (it likely swallowed a
+ * neighbouring word too); either way `repairWordTimings` catches it
+ * afterwards with the text heuristic.
+ */
+export function repairChunkWordTimings(words: Word[], env: Float32Array, frameSec: number, opts: WordTimingOptions = DEFAULT_WORD_TIMING): Word[] {
+  return words.map((w) => {
+    if (!isStretchedWord(w, opts)) return w
+    const want = maxPlausibleDuration(w.text, opts)
+    const found = locateWordEnergy(env, frameSec, w.t0, w.t1)
+    if (!found) return w
+    const duration = found.t1 - found.t0
+    if (duration < opts.minDuration * 0.5 || duration > want * 2.5) return w
+    return { ...w, t0: found.t0, t1: found.t1 }
+  })
 }
 
 /** Version of the per-chunk transcript files; chunks written by older versions are redone. */

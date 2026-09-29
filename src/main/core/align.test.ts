@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { bestLag, envelope, pcm16ToFloat } from './align'
+import { bestLag, envelope, locateWordEnergy, pcm16ToFloat } from './align'
+
+/** A 10 ms-frame envelope: mostly a quiet floor, loud during the given [start, end) frame ranges. */
+function fakeEnvelope(frames: number, loudRanges: [number, number][], floor = 0.01, loud = 0.5): Float32Array {
+  const out = new Float32Array(frames).fill(floor)
+  for (const [a, b] of loudRanges) for (let i = a; i < b && i < frames; i++) out[i] = loud
+  return out
+}
 
 function noiseBursts(seconds: number, rate: number, seed = 3): Float32Array {
   let s = seed
@@ -50,5 +57,50 @@ describe('align', () => {
     b.writeInt16LE(16384, 0)
     b.writeInt16LE(-32768, 2)
     expect(Array.from(pcm16ToFloat(b))).toEqual([0.5, -1])
+  })
+})
+
+describe('locateWordEnergy', () => {
+  const frameSec = 0.01
+
+  it('finds a short burst of speech inside a much wider silent span', () => {
+    // A word really spoken at 0.30-0.40 s, but whisper stretched it 0-0.80 s.
+    const env = fakeEnvelope(100, [[30, 40]])
+    const found = locateWordEnergy(env, frameSec, 0, 0.8)
+    expect(found).not.toBeNull()
+    expect(found!.t0).toBeCloseTo(0.3, 2)
+    expect(found!.t1).toBeCloseTo(0.4, 2)
+  })
+
+  it('bridges a short dip inside one word (a stop consonant or a breath)', () => {
+    // Two loud stretches 2 frames apart (20 ms), well under the bridge.
+    const env = fakeEnvelope(100, [
+      [30, 40],
+      [42, 50]
+    ])
+    const found = locateWordEnergy(env, frameSec, 0, 0.8, 0.12)
+    expect(found!.t0).toBeCloseTo(0.3, 2)
+    expect(found!.t1).toBeCloseTo(0.5, 2)
+  })
+
+  it('does not bridge a real gap between two separate words', () => {
+    // Two loud stretches far apart: picks the louder/longer one, not both.
+    const env = fakeEnvelope(100, [
+      [10, 15],
+      [60, 80]
+    ])
+    const found = locateWordEnergy(env, frameSec, 0, 1.0, 0.12)
+    expect(found!.t0).toBeCloseTo(0.6, 2)
+    expect(found!.t1).toBeCloseTo(0.8, 2)
+  })
+
+  it('returns null for a span with no clear speech', () => {
+    const env = fakeEnvelope(100, [])
+    expect(locateWordEnergy(env, frameSec, 0, 0.8)).toBeNull()
+  })
+
+  it('returns null for a degenerate (empty) span', () => {
+    const env = fakeEnvelope(100, [[30, 40]])
+    expect(locateWordEnergy(env, frameSec, 0.5, 0.5)).toBeNull()
   })
 })

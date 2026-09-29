@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, unpackWords, wordsIn } from './transcript'
+import { mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, wordsIn } from './transcript'
+
+/** A 10 ms-frame envelope: mostly a quiet floor, loud during the given [start, end) frame ranges. */
+function fakeEnvelope(frames: number, loudRanges: [number, number][], floor = 0.01, loud = 0.5): Float32Array {
+  const out = new Float32Array(frames).fill(floor)
+  for (const [a, b] of loudRanges) for (let i = a; i < b && i < frames; i++) out[i] = loud
+  return out
+}
 
 describe('planChunks', () => {
   it('covers the whole duration without gaps', () => {
@@ -106,5 +113,37 @@ describe('placeChunkWords', () => {
   it('keeps a word that runs just past the end, clipped', () => {
     const r = placeChunkWords([{ t0: 599.8, t1: 603, text: 'end' }], range)
     expect(r.words[0]!.t1).toBe(1801)
+  })
+})
+
+describe('repairChunkWordTimings', () => {
+  const frameSec = 0.01
+
+  it('places a stretched word on the real speech found in the envelope', () => {
+    // "mind" really spoken at 3.98-4.20 s, but whisper stretched it 0.71-11.93 s.
+    const env = fakeEnvelope(1300, [[398, 420]])
+    const words = [{ t0: 0.71, t1: 11.93, text: 'Mind' }]
+    const fixed = repairChunkWordTimings(words, env, frameSec)
+    expect(fixed[0]!.t0).toBeCloseTo(3.98, 2)
+    expect(fixed[0]!.t1).toBeCloseTo(4.2, 2)
+  })
+
+  it('leaves plausible words alone', () => {
+    const env = fakeEnvelope(200, [[10, 20]])
+    const words = [{ t0: 0.1, t1: 0.2, text: 'hi' }]
+    expect(repairChunkWordTimings(words, env, frameSec)).toEqual(words)
+  })
+
+  it('leaves a word alone when its span has no clear speech', () => {
+    const env = fakeEnvelope(1300, [])
+    const words = [{ t0: 0.71, t1: 11.93, text: 'Mind' }]
+    expect(repairChunkWordTimings(words, env, frameSec)).toEqual(words)
+  })
+
+  it('leaves a word alone when the match found is implausibly wide', () => {
+    // The whole span looks loud (maybe two words' worth): do not trust it.
+    const env = fakeEnvelope(1300, [[0, 1200]])
+    const words = [{ t0: 0.71, t1: 11.93, text: 'Mind' }]
+    expect(repairChunkWordTimings(words, env, frameSec)).toEqual(words)
   })
 })
