@@ -13,6 +13,7 @@ function signals(partial: Partial<StructureSignals>): StructureSignals {
     chatRateRatio: 0,
     silenceRatio: 0.1,
     subPeaks: 1,
+    subPeakTimes: [],
     chatLeadSec: 0,
     ...partial
   }

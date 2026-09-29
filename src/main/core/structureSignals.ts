@@ -46,6 +46,8 @@ export interface StructureSignals {
   silenceRatio: number
   /** Count of local maxima in the combined chat/loudness activity that come within 70% of the strongest one, at least 3 s apart. */
   subPeaks: number
+  /** Where each of those `subPeaks` local maxima sits, clip-relative seconds, earliest first. Empty with no activity signal. */
+  subPeakTimes: number[]
   /**
    * Seconds the chat burst's own peak comes before the combined (chat +
    * loudness) peak used for `peakRatio`; 0 when there is no separate chat
@@ -199,7 +201,8 @@ export function computeSignals(facts: ClipFacts): StructureSignals {
   const peakSecond = primaryNorm ? Math.min(clipLength, argmax(primaryNorm)) : clipLength / 2
   const peakRatio = clamp01(peakSecond / clipLength)
   const setupLength = peakSecond
-  const subPeaks = primaryNorm ? localPeaks(primaryNorm, SUBPEAK_FRACTION, SUBPEAK_SEPARATION_SEC).length : 0
+  const subPeakTimes = primaryNorm ? localPeaks(primaryNorm, SUBPEAK_FRACTION, SUBPEAK_SEPARATION_SEC).sort((a, b) => a - b) : []
+  const subPeaks = subPeakTimes.length
 
   let chatLeadSec = 0
   if (chatNorm && primary !== chat) {
@@ -235,5 +238,5 @@ export function computeSignals(facts: ClipFacts): StructureSignals {
   }
   const silenceRatio = clamp01(silentSeconds / seconds)
 
-  return { clipLength, peakRatio, setupLength, quotableSpans, chatRateRatio, silenceRatio, subPeaks, chatLeadSec }
+  return { clipLength, peakRatio, setupLength, quotableSpans, chatRateRatio, silenceRatio, subPeaks, subPeakTimes, chatLeadSec }
 }
