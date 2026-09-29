@@ -9,6 +9,7 @@ import {
   edgeSkip,
   fallbackTitle,
   findCandidates,
+  LOW_RATING,
   maxClipCount,
   MIN_CLIPS,
   scoreToStrength,
@@ -196,11 +197,12 @@ describe('selectNonOverlapping', () => {
 })
 
 describe('selectByQuality', () => {
-  function loud(strength: number, start: number): { window: Range; strength: number; chatZ: number; audioZ: number } {
-    return { window: { start, end: start + 20 }, strength, chatZ: 0, audioZ: strength }
+  type Item = { window: Range; strength: number; chatZ: number; audioZ: number; rating?: number | null }
+  function loud(strength: number, start: number, rating: number | null = null): Item {
+    return { window: { start, end: start + 20 }, strength, chatZ: 0, audioZ: strength, rating }
   }
-  function chatBacked(strength: number, start: number): { window: Range; strength: number; chatZ: number; audioZ: number } {
-    return { window: { start, end: start + 20 }, strength, chatZ: strength, audioZ: 0 }
+  function chatBacked(strength: number, start: number, rating: number | null = null): Item {
+    return { window: { start, end: start + 20 }, strength, chatZ: strength, audioZ: 0, rating }
   }
 
   it('returns nothing for no candidates', () => {
@@ -232,6 +234,58 @@ describe('selectByQuality', () => {
     const chosen = selectByQuality(items, 3, 20)
     expect(chosen.some((c) => c.strength === 20)).toBe(true)
     expect(chosen.length).toBeLessThan(items.length)
+  })
+
+  it('is unaffected by rating fields that are absent, matching plain Candidate objects', () => {
+    // findCandidates/Candidate never carries a rating; the type only requires
+    // it to be optional, and its absence must behave like null (no model).
+    const items = [
+      { window: { start: 0, end: 20 }, strength: 2, chatZ: 2, audioZ: 0 },
+      { window: { start: 100, end: 120 }, strength: 3.13, chatZ: 0, audioZ: 6.42 }
+    ]
+    expect(selectByQuality(items, 3, 10)).toHaveLength(2)
+  })
+
+  it('drops a chat-backed candidate the model rates at or below LOW_RATING, overriding its usual free pass', () => {
+    const items = [chatBacked(2, 0, LOW_RATING), chatBacked(2.1, 100, 8), chatBacked(1.9, 200, 8), chatBacked(2.2, 300, 8)]
+    const chosen = selectByQuality(items, 3, 10)
+    expect(chosen.some((c) => c.rating === LOW_RATING)).toBe(false)
+    expect(chosen).toHaveLength(3)
+  })
+
+  it('drops a loud-only candidate the model rates at or below LOW_RATING even if its strength already cleared the bar', () => {
+    // Three unrated outliers clear the bar on their own (so the MIN_CLIPS
+    // floor is satisfied without it), plus a fourth, even stronger outlier
+    // that the model rates at LOW_RATING.
+    const items = [
+      ...Array.from({ length: 10 }, (_, i) => loud(3 + i * 0.02, i * 100)),
+      loud(12, 1200),
+      loud(14, 1400),
+      loud(16, 1600),
+      loud(20, 2000, LOW_RATING)
+    ]
+    const chosen = selectByQuality(items, 3, 20)
+    expect(chosen).toHaveLength(3)
+    expect(chosen.some((c) => c.strength === 20)).toBe(false)
+    expect(chosen.map((c) => c.strength).sort((a, b) => a - b)).toEqual([12, 14, 16])
+  })
+
+  it('the MIN_CLIPS floor overrides a low rating when there are not enough other candidates', () => {
+    const items = [chatBacked(2, 0, LOW_RATING), chatBacked(2.1, 100, LOW_RATING), chatBacked(1.9, 200, LOW_RATING)]
+    expect(selectByQuality(items, 3, 10)).toHaveLength(3)
+  })
+
+  it('lets a highly-rated loud-only candidate clear a bar it would otherwise fail (rating folded into strength by the caller)', () => {
+    // Caller (steps.ts) scales strength by ratingFactor before calling in;
+    // this checks selectByQuality actually uses that scaled strength for the
+    // bar rather than some other field.
+    const ordinary = Array.from({ length: 10 }, (_, i) => loud(3 + i * 0.02, i * 100, 6))
+    const barelyAboveThreshold = loud(3.01, 5000, 9)
+    const boosted = { ...barelyAboveThreshold, strength: barelyAboveThreshold.strength * 1.6 }
+    const withoutBoost = selectByQuality([...ordinary, barelyAboveThreshold], 3, 20)
+    const withBoost = selectByQuality([...ordinary, boosted], 3, 20)
+    expect(withoutBoost.some((c) => c.window.start === 5000)).toBe(false)
+    expect(withBoost.some((c) => c.window.start === 5000)).toBe(true)
   })
 })
 

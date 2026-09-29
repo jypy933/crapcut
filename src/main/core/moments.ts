@@ -282,18 +282,33 @@ function groupBar(strengths: number[], z: number): number {
   return med + z * scale
 }
 
+/** A model rating (1..10) at or below this is the model saying no. */
+export const LOW_RATING = 3
+
+function isLowRated(rating: number | null | undefined): boolean {
+  return rating !== null && rating !== undefined && rating <= LOW_RATING
+}
+
 /**
  * Picks clips by quality instead of always filling to a fixed count. Chat-
  * and transcript-backed candidates already passed their own selective
  * checks (a real burst of different chatters, or the model's own rating) and
- * are always kept. Loud-only candidates get an extra bar relative to this
- * stream's *other* loud-only candidates -- audio has no natural ceiling and
- * (especially in a loud game) can turn up many technically-above-baseline
- * moments that are merely loud rather than notable, so only the ones that
- * stand out even among those are kept. Never fewer than `min` clips while
- * that many candidates exist at all, never more than `max`.
+ * normally skip the loud-only bar below. Loud-only candidates get an extra
+ * bar relative to this stream's *other* loud-only candidates -- audio has no
+ * natural ceiling and (especially in a loud game) can turn up many
+ * technically-above-baseline moments that are merely loud rather than
+ * notable, so only the ones that stand out even among those are kept
+ * (`strength` is expected to already fold in the model's rating when there
+ * is one, so a loud moment it rates highly can still clear this bar).
+ *
+ * Whatever the source, a candidate the model rated `LOW_RATING` or below is
+ * dropped outright -- that overrides even a chat- or transcript-backed
+ * candidate's usual free pass, since a real burst of chatters can still be
+ * about something not worth a clip. Never fewer than `min` clips while that
+ * many candidates exist at all (a very negative model is not allowed to
+ * empty the list), never more than `max`.
  */
-export function selectByQuality<T extends { window: Range; strength: number; chatZ: number; audioZ: number }>(
+export function selectByQuality<T extends { window: Range; strength: number; chatZ: number; audioZ: number; rating?: number | null }>(
   items: T[],
   min: number,
   max: number
@@ -308,7 +323,7 @@ export function selectByQuality<T extends { window: Range; strength: number; cha
     ranked.filter(isLoudOnly).map((c) => c.strength),
     LOUD_QUALITY_Z
   )
-  let kept = ranked.filter((c) => !isLoudOnly(c) || c.strength >= bar)
+  let kept = ranked.filter((c) => !isLowRated(c.rating) && (!isLoudOnly(c) || c.strength >= bar))
   if (kept.length < Math.min(min, ranked.length)) kept = ranked.slice(0, min)
   return kept.slice(0, max)
 }
