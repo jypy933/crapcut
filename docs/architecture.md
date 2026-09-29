@@ -242,8 +242,20 @@ roughly 10 to 30 times faster than real time (the CPU small model manages
 about 4). Faster GPU builds like this one are optional: a PC set up before an
 update added one gets it fetched in the background (`tools/accelerators.ts`)
 and keeps using the CPU until it is installed. llama.cpp uses its Vulkan build
-(works on NVIDIA and AMD, CPU fallback included). Video encoding tries NVENC /
-AMF / QSV with a one-second test encode and falls back to libx264.
+(works on NVIDIA and AMD, CPU fallback included). On NVIDIA with a driver >=
+551.61 (the CUDA 12.4 minimum, `LLAMA_CUDA_MIN_DRIVER`) `HardwareProfile.llmCuda` is set and the CUDA
+build of the same llama.cpp release is tried first, because prompt reading, the
+bulk of the language-model work, is about twice as fast there. It needs two
+optional parts next to the Vulkan one (`llama-cuda` and `llama-cuda-runtime`,
+both under "Smart picks and titles"); the runtime folder is put on PATH for the
+llama-server child only. `core/llmBackend.ts` plans the attempts (CUDA, then
+Vulkan or CPU) and `startFirstWorking` runs them: the CUDA server is started
+with `--device CUDA0` (so it exits at once instead of quietly running on the
+CPU when CUDA is unusable) and must answer one small request before the job
+uses it; if either fails it is stopped and the Vulkan build takes over. The
+backend that ran is logged ("llama-server backend: cuda|vulkan|cpu"). Video
+encoding tries NVENC / AMF / QSV with a one-second test encode and falls back
+to libx264.
 
 ## Setup and optional AI parts
 

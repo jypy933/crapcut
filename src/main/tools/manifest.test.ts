@@ -53,3 +53,49 @@ describe('manifest', () => {
     for (const x of ARTIFACTS) expect(x.sha256).toMatch(/^[0-9a-f]{64}$/)
   })
 })
+
+const rtx: HardwareProfile = {
+  gpus: [{ vendor: 'nvidia', name: 'RTX 3080', vramMb: 10240 }],
+  primary: { vendor: 'nvidia', name: 'RTX 3080', vramMb: 10240 },
+  whisper: 'cuda',
+  llm: 'vulkan',
+  llmCuda: true,
+  totalRamMb: 16384,
+  cpuThreads: 16
+}
+
+describe('CUDA language-model build', () => {
+  it('comes from the same pinned release as the Vulkan build, over an allowed host', () => {
+    const vulkan = artifact('llama')
+    for (const id of ['llama-cuda', 'llama-cuda-runtime'] as const) {
+      const a = artifact(id)
+      expect(a.url).toContain('/ggml-org/llama.cpp/releases/download/b11236/')
+      expect(isAllowedDownloadUrl(a.url)).toBe(true)
+      expect(a.sha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(a.optional).toBe(true)
+    }
+    expect(artifact('llama-cuda').version).toBe(vulkan.version)
+  })
+
+  it('is fetched only where the PC is set up for it', () => {
+    const ids = (hw: HardwareProfile): string[] => neededArtifacts(hw).map((a) => a.id)
+    expect(ids(rtx)).toEqual(expect.arrayContaining(['llama', 'llama-cuda', 'llama-cuda-runtime']))
+    expect(ids({ ...rtx, llmCuda: false })).not.toContain('llama-cuda')
+    expect(ids({ ...rtx, llmCuda: undefined })).not.toContain('llama-cuda-runtime')
+  })
+
+  it('unpacks the server and its libraries, and the runtime libraries, but not the other tools', () => {
+    const build = artifact('llama-cuda').include!
+    for (const name of ['llama-server.exe', 'ggml-cuda.dll', 'ggml-base.dll', 'ggml-cpu-zen4.dll', 'llama.dll', 'LICENSE-LLVM-OpenMP']) expect(build.test(name), name).toBe(true)
+    for (const name of ['llama-cli.exe', 'llama-bench.exe', 'ggml-rpc-server.exe']) expect(build.test(name), name).toBe(false)
+    const runtime = artifact('llama-cuda-runtime').include!
+    for (const name of ['cudart64_12.dll', 'cublas64_12.dll', 'cublasLt64_12.dll']) expect(runtime.test(name), name).toBe(true)
+    expect(runtime.test('llama-server.exe')).toBe(false)
+    expect(artifact('llama-cuda-runtime').entry).toBe('cudart64_12.dll')
+  })
+
+  it('is listed with its licence like every other part', () => {
+    expect(artifact('llama-cuda-runtime').licence.name).toContain('CUDA')
+    expect(ARTIFACTS.filter((a) => !a.deprecated).map((a) => a.id)).toEqual(expect.arrayContaining(['llama-cuda', 'llama-cuda-runtime']))
+  })
+})

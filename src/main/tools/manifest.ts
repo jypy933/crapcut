@@ -13,6 +13,8 @@ export type ToolId =
   | 'whisper-cuda'
   | 'whisper-vulkan'
   | 'llama'
+  | 'llama-cuda'
+  | 'llama-cuda-runtime'
   | 'model-whisper-large'
   | 'model-whisper-small'
   | 'model-vad'
@@ -168,6 +170,42 @@ export const ARTIFACTS: readonly Artifact[] = [
     licence: { name: 'MIT', url: 'https://github.com/ggml-org/llama.cpp/blob/master/LICENSE' },
     optional: true,
     needed: () => true
+  },
+  {
+    // Same release as the Vulkan build above; NVIDIA PCs try this one first and
+    // fall back to Vulkan if it cannot start (see `pipeline/llmBackend.ts`).
+    id: 'llama-cuda',
+    label: 'llama.cpp (NVIDIA)',
+    version: 'b11236',
+    url: `${GH}/ggml-org/llama.cpp/releases/download/b11236/llama-b11236-bin-win-cuda-12.4-x64.zip`,
+    sha256: '978a78be020697e468b5608a6b42b8ecc4d25676f4fbf3c5b3df2e9880a04e19',
+    size: 264523826,
+    kind: 'zip',
+    include: /^(llama-server\.exe|[\w-]+\.dll|LICENSE[\w.-]*)$/,
+    entry: 'llama-server.exe',
+    licence: { name: 'MIT', url: 'https://github.com/ggml-org/llama.cpp/blob/master/LICENSE' },
+    optional: true,
+    needed: (hw) => hw.llmCuda === true
+  },
+  {
+    // The CUDA libraries the build above needs, from the same release. Kept in
+    // their own folder and put on PATH for the llama-server child only.
+    id: 'llama-cuda-runtime',
+    label: 'NVIDIA CUDA runtime',
+    version: '12.4',
+    url: `${GH}/ggml-org/llama.cpp/releases/download/b11236/cudart-llama-bin-win-cuda-12.4-x64.zip`,
+    sha256: '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6',
+    size: 391443627,
+    kind: 'zip',
+    include: /^cu\w+64_\d+\.dll$/,
+    entry: 'cudart64_12.dll',
+    licence: {
+      name: 'NVIDIA CUDA EULA',
+      url: 'https://docs.nvidia.com/cuda/eula/index.html',
+      note: 'NVIDIA CUDA runtime and cuBLAS libraries, redistributed under the NVIDIA CUDA EULA'
+    },
+    optional: true,
+    needed: (hw) => hw.llmCuda === true
   },
   {
     id: 'model-whisper-large',

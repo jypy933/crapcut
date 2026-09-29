@@ -71,6 +71,18 @@ describe('SetupManager', () => {
     expect(ids).not.toContain('whisper-cuda')
   })
 
+  it('adds the optional CUDA language-model build only where the PC is set up for it', async () => {
+    const { registry } = fakeRegistry()
+    const without = (await new SetupManager(registry, nvidia, 'C:\\x').status()).components.map((c) => c.id)
+    expect(without).not.toContain('llama-cuda')
+    expect(without).not.toContain('llama-cuda-runtime')
+    const s = await new SetupManager(registry, { ...nvidia, llmCuda: true }, 'C:\\x').status()
+    for (const id of ['llama', 'llama-cuda', 'llama-cuda-runtime']) {
+      const c = s.components.find((x) => x.id === id)
+      expect(c?.optional, id).toBe(true)
+    }
+  })
+
   it('installs small tools first and big optional models last', async () => {
     const { registry, order } = fakeRegistry()
     const m = new SetupManager(registry, nvidia, 'C:\\x')

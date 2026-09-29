@@ -34,7 +34,7 @@ import {
   type Refined
 } from '../core/llmPrompt'
 import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
-import { llmSlots } from '../core/llmBackend'
+import { planLlmAttempts, startFirstWorking, type StartedLlm } from '../core/llmBackend'
 import { runPool } from '../core/pool'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
 import { fallbackTitle, findCandidates, maxClipCount, MIN_CLIPS, scoreToStrength, selectByQuality, type Candidate } from '../core/moments'
@@ -523,34 +523,62 @@ const MAX_LLM_FAILURES = 3
 /** A second sample's sampling, distinct enough from the default request to be a real second opinion. */
 const SECOND_SAMPLE = { temperature: 0.6, seed: 7919 }
 
-/** Starts the local language model, or returns null (not installed / failed). */
+/** A request the CUDA build must answer before it is trusted with the job (see `openLlm`). */
+const WARMUP_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false } as const
+
+/**
+ * Starts the local language model, or returns null (not installed / failed).
+ * On NVIDIA the CUDA build goes first; if it does not start or does not
+ * answer its first request, the Vulkan build takes over (see `planLlmAttempts`).
+ */
 async function openLlm(ctx: StepContext): Promise<LlmSession | null> {
-  const exe = ctx.tools.path('llama')
   const qwenModel = ctx.tools.path('model-llm-9b')
   const model = ctx.llmModelOverride ?? qwenModel ?? ctx.tools.path('model-llm-8b') ?? ctx.tools.path('model-llm-3b')
-  if (!exe || !model) {
+  const twoSample = !ctx.llmModelOverride && model === qwenModel
+  const attempts = model
+    ? planLlmAttempts(ctx.hw, { llama: ctx.tools.path('llama'), llamaCuda: ctx.tools.path('llama-cuda'), cudaRuntime: ctx.tools.path('llama-cuda-runtime') }, twoSample)
+    : []
+  if (!model || attempts.length === 0) {
     ctx.log.info('language model not installed; using signals only')
     return null
   }
-  const twoSample = !ctx.llmModelOverride && model === qwenModel
-  const gpu = ctx.hw.llm === 'vulkan'
-  const slots = llmSlots(gpu, twoSample)
   const release = await ctx.gpu.acquire(ctx.signal)
-  const server = new LlamaServer({ exe, cwd: ctx.paths.root, model: relative(ctx.paths.root, model), gpu, slots })
   ctx.progress(0.02, 'Starting the language model')
+  let started: StartedLlm<LlamaServer> | null
   try {
-    await server.start(ctx.signal)
+    started = await startFirstWorking(attempts, {
+      start: async (a) => {
+        const server = new LlamaServer({ exe: a.exe, cwd: ctx.paths.root, model: relative(ctx.paths.root, model), gpu: a.gpu, slots: a.slots, device: a.device, dllDirs: a.dllDirs })
+        try {
+          await server.start(ctx.signal)
+        } catch (err) {
+          server.stop()
+          throw err
+        }
+        return server
+      },
+      verify: async (server, a) => {
+        if (a.backend !== 'cuda') return
+        const answer = await server.complete([{ role: 'system', content: 'Answer with the JSON object only.' }, { role: 'user', content: 'Reply with {"ok": true}.' }], WARMUP_SCHEMA, ctx.signal)
+        if (!answer.includes('ok')) throw new Error('the CUDA build gave an empty answer')
+      },
+      onFailed: (a, err) => ctx.log.warn(`llama-server (${a.backend}) did not work${a === attempts[attempts.length - 1] ? '' : '; trying the next build'}`, err)
+    })
   } catch (err) {
-    server.stop()
     release()
-    if (isCancelled(err)) throw err
-    ctx.log.warn('language model failed to start; using signals only', err)
+    throw err
+  }
+  if (!started) {
+    release()
+    ctx.log.warn('language model failed to start; using signals only')
     return null
   }
+  ctx.log.info(`llama-server backend: ${started.attempt.backend}, ${started.attempt.slots} slot${started.attempt.slots === 1 ? '' : 's'}`)
+  const { server, attempt } = started
   return {
     server,
     twoSample,
-    slots,
+    slots: attempt.slots,
     close: () => {
       server.stop()
       release()

@@ -33,6 +33,12 @@ describe('optionalModelArtifactIds', () => {
     expect(optionalModelArtifactIds('llm', bigGpu)).toEqual(['llama', 'model-llm-9b'])
   })
 
+  it('adds the CUDA build and its runtime on an NVIDIA PC set up for it, keeping Vulkan', () => {
+    const rtx: HardwareProfile = { ...bigGpu, primary: { vendor: 'nvidia', name: 'RTX 3080', vramMb: 10240 }, whisper: 'cuda', llmCuda: true }
+    expect(optionalModelArtifactIds('llm', rtx)).toEqual(['llama', 'llama-cuda', 'llama-cuda-runtime', 'model-llm-9b'])
+    expect(optionalModelArtifactIds('llm', { ...rtx, llmCuda: false })).toEqual(['llama', 'model-llm-9b'])
+  })
+
   it('picks the 3B model otherwise', () => {
     expect(optionalModelArtifactIds('llm', smallGpu)).toEqual(['llama', 'model-llm-3b'])
   })

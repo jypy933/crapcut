@@ -245,6 +245,8 @@ export interface HardwareProfile {
   whisper: 'cuda' | 'vulkan' | 'cpu'
   /** What llama.cpp will run on. */
   llm: 'vulkan' | 'cpu'
+  /** The CUDA build of llama.cpp is worth fetching and trying first (NVIDIA, new enough driver). Vulkan stays as the fallback. */
+  llmCuda?: boolean
   totalRamMb: number
   cpuThreads: number
 }

@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { runTool, killTree, ToolFailedError } from '../tools/process'
-import { LLM_SLOT_CTX } from '../core/llmBackend'
+import { LLM_SLOT_CTX, withPathDirs } from '../core/llmBackend'
 import { CancelledError, UserError } from '../util/errors'
 import { logger } from '../util/log'
 
@@ -105,6 +105,10 @@ export interface LlamaServerOptions {
   gpu: boolean
   /** Requests served at once; defaults to 1. */
   slots?: number
+  /** Restrict to one device such as "CUDA0", so startup fails rather than quietly running on the CPU. */
+  device?: string | null
+  /** Folders put in front of PATH for this process only (DLLs the exe needs that are not next to it). */
+  dllDirs?: string[]
 }
 
 /** A llama-server process that lives for one pipeline step. */
@@ -137,6 +141,7 @@ export class LlamaServer {
       String(slots),
       '-ngl',
       this.o.gpu ? '999' : '0',
+      ...(this.o.device ? ['--device', this.o.device] : []),
       '--jinja',
       // Answers are short JSON; "thinking" models would waste the token budget.
       '--reasoning-budget',
@@ -152,14 +157,22 @@ export class LlamaServer {
   async start(signal: AbortSignal): Promise<void> {
     this.port = await freePort()
     const args = this.args()
-    this.child = spawn(this.o.exe, args, { cwd: this.o.cwd, shell: false, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
+    this.child = spawn(this.o.exe, args, {
+      cwd: this.o.cwd,
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: withPathDirs(process.env, this.o.dllDirs ?? [])
+    })
     this.child.stderr?.setEncoding('utf8')
     this.child.stderr?.on('data', (d: string) => (this.stderr = (this.stderr + d).slice(-8000)))
     const exited = new Promise<never>((_, reject) => {
       this.child!.once('exit', (code) => reject(new ToolFailedError('llama-server', code, this.stderr)))
       this.child!.once('error', reject)
     })
-    exited.catch(() => {})
+    // The process ending or failing to launch at all (no such file, missing DLL) ends the wait.
+    let failure: unknown = null
+    exited.catch((err: unknown) => (failure = err))
     const deadline = Date.now() + 180_000
     while (Date.now() < deadline) {
       if (signal.aborted) {
@@ -173,7 +186,7 @@ export class LlamaServer {
           return
         }
       } catch (err) {
-        if (err instanceof ToolFailedError) throw err
+        if (failure) throw failure
       }
       await new Promise((r) => setTimeout(r, 500))
     }

@@ -88,6 +88,14 @@ export const WHISPER_GPU_MIN_VRAM_MB = 3500
 /** Minimum NVIDIA driver for the CUDA 11.8 whisper build. */
 export const MIN_NVIDIA_DRIVER = 452.39
 
+/**
+ * Minimum NVIDIA driver for the CUDA 12.4 llama.cpp build: the driver that
+ * ships with the CUDA 12.4 GA toolkit (release notes, "CUDA Toolkit and
+ * Corresponding Driver Versions": >=551.61 on Windows). The 528.33 minor-version
+ * compatibility floor is not used: only the documented minimum is trusted here.
+ */
+export const LLAMA_CUDA_MIN_DRIVER = 551.61
+
 export function chooseProfile(gpus: GpuInfo[], nvidiaDriver: number | null, totalRamMb: number, cpuThreads: number): HardwareProfile {
   const rank = (g: GpuInfo): number => (g.vendor === 'nvidia' ? 3 : g.vendor === 'amd' ? 2 : g.vendor === 'intel' ? 1 : 0) * 1e6 + (g.vramMb ?? 0)
   const primary = [...gpus].filter((g) => g.vendor !== 'other').sort((a, b) => rank(b) - rank(a))[0] ?? null
@@ -103,6 +111,8 @@ export function chooseProfile(gpus: GpuInfo[], nvidiaDriver: number | null, tota
     primary,
     whisper: cudaOk ? 'cuda' : whisperVulkanOk ? 'vulkan' : 'cpu',
     llm: vulkanOk ? 'vulkan' : 'cpu',
+    // The CUDA build is an optional speed-up on top of Vulkan, so it needs a driver known to be new enough.
+    llmCuda: vulkanOk && primary?.vendor === 'nvidia' && nvidiaDriver !== null && nvidiaDriver >= LLAMA_CUDA_MIN_DRIVER,
     totalRamMb,
     cpuThreads
   }
@@ -154,7 +164,7 @@ export async function detectHardware(): Promise<HardwareProfile> {
   }
 
   const profile = chooseProfile(gpus, driver, totalRamMb, cpuThreads)
-  log.info('hardware', { gpus: profile.gpus, whisper: profile.whisper, llm: profile.llm, ramMb: totalRamMb, threads: cpuThreads, driver })
+  log.info('hardware', { gpus: profile.gpus, whisper: profile.whisper, llm: profile.llm, llmCuda: profile.llmCuda, ramMb: totalRamMb, threads: cpuThreads, driver })
   return profile
 }
 

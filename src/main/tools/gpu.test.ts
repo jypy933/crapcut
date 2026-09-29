@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { adaptersFromRegistry, chooseProfile, parseNvidiaSmi, parseRegValues, vendorFromPci } from './gpu'
+import { adaptersFromRegistry, chooseProfile, LLAMA_CUDA_MIN_DRIVER, parseNvidiaSmi, parseRegValues, vendorFromPci } from './gpu'
 
 const K = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}'
 
@@ -91,6 +91,21 @@ describe('chooseProfile', () => {
       16
     )
     expect(p.primary?.vendor).toBe('nvidia')
+  })
+  it('offers the CUDA language-model build only with a driver known to be new enough', () => {
+    const rtx = [{ vendor: 'nvidia' as const, name: 'RTX 3080', vramMb: 10240 }]
+    expect(chooseProfile(rtx, LLAMA_CUDA_MIN_DRIVER, 16384, 16).llmCuda).toBe(true)
+    expect(chooseProfile(rtx, 581.57, 16384, 16).llmCuda).toBe(true)
+    expect(chooseProfile(rtx, 546.33, 16384, 16).llmCuda).toBe(false)
+    // Unknown driver: whisper may still try CUDA, the bigger download is not worth a guess.
+    expect(chooseProfile(rtx, null, 16384, 16).llmCuda).toBe(false)
+    // The Vulkan build is untouched either way.
+    expect(chooseProfile(rtx, 546.33, 16384, 16).llm).toBe('vulkan')
+  })
+  it('never offers the CUDA language-model build off NVIDIA or with too little VRAM', () => {
+    expect(chooseProfile([{ vendor: 'amd', name: 'RX 9060 XT', vramMb: 8144 }], null, 32768, 16).llmCuda).toBe(false)
+    expect(chooseProfile([{ vendor: 'nvidia', name: 'GTX 750', vramMb: 2048 }], 581.57, 16384, 16).llmCuda).toBe(false)
+    expect(chooseProfile([], null, 8192, 8).llmCuda).toBe(false)
   })
   it('runs everything on the CPU without a usable GPU', () => {
     expect(chooseProfile([], null, 8192, 8)).toMatchObject({ whisper: 'cpu', llm: 'cpu', primary: null })

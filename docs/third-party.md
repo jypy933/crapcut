@@ -17,6 +17,8 @@ pinned to the exact version, and checked against the SHA-256 in
 | whisper.cpp (CUDA 11.8 build, NVIDIA only; includes NVIDIA CUDA runtime under the NVIDIA CUDA EULA) | 1.9.4 (b5130) | MIT | https://github.com/ggml-org/whisper.cpp/releases/tag/b5130 |
 | whisper.cpp (Vulkan build, AMD only), built by this repo's CI ([whisper-vulkan.yml](../.github/workflows/whisper-vulkan.yml)) from the v1.9.4 source | 1.9.4 (tools-whisper-vulkan-1) | MIT | https://github.com/jypy933/crapcut/releases/tag/tools-whisper-vulkan-1 |
 | llama.cpp (Vulkan build) | b11236 | MIT | https://github.com/ggml-org/llama.cpp/releases/tag/b11236 |
+| llama.cpp (CUDA 12.4 build, NVIDIA with driver 551.61 or newer only; tried first, the Vulkan build is the fallback) | b11236 | MIT | https://github.com/ggml-org/llama.cpp/releases/tag/b11236 |
+| NVIDIA CUDA 12.4 runtime for the build above (cudart, cuBLAS; NVIDIA only; redistributed under the NVIDIA CUDA EULA) | 12.4 | NVIDIA CUDA EULA | https://github.com/ggml-org/llama.cpp/releases/tag/b11236 |
 | Whisper large-v3-turbo and small (both q8_0; large transcribes the whole VOD on NVIDIA and AMD, small transcribes it on the CPU with large re-run on the kept clips only) | ggml | MIT (OpenAI Whisper) | https://huggingface.co/ggerganov/whisper.cpp |
 | Silero VAD | 6.2.0 | MIT | https://huggingface.co/ggml-org/whisper-vad |
 | Qwen3.5 9B (Q4_K_M, unsloth GGUF build; no official GGUF from the Qwen org yet), or Ministral 3 3B Instruct 2512 (Q4_K_M) on smaller GPUs | Q4_K_M | Apache-2.0 | https://huggingface.co/Qwen/Qwen3.5-9B (weights), https://huggingface.co/unsloth/Qwen3.5-9B-GGUF (quantization); https://huggingface.co/mistralai (3B) |

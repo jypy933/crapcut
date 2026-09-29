@@ -10,7 +10,7 @@ import type { ComponentState, HardwareProfile, SetupComponent } from './types'
 export type OptionalModelId = 'llm' | 'voiceSeparation'
 
 /** Artifact ids used by an optional part. A subset of main/tools/manifest.ts's ToolId. */
-export type OptionalArtifactId = 'llama' | 'model-llm-9b' | 'model-llm-3b' | 'separator' | 'model-demucs'
+export type OptionalArtifactId = 'llama' | 'llama-cuda' | 'llama-cuda-runtime' | 'model-llm-9b' | 'model-llm-3b' | 'separator' | 'model-demucs'
 
 export interface OptionalModel {
   id: OptionalModelId
@@ -35,7 +35,8 @@ const PARTS: readonly Part[] = [
     id: 'llm',
     label: 'Smart picks and titles',
     description: 'A small local language model that sharpens which moments become clips and writes their titles. Without it, CrapCut still finds clips from chat and audio alone.',
-    artifactIds: (hw) => ['llama', canRunBigLlm(hw) ? 'model-llm-9b' : 'model-llm-3b']
+    // On NVIDIA the CUDA build comes along; the Vulkan one stays as the fallback.
+    artifactIds: (hw) => ['llama', ...(hw.llmCuda ? (['llama-cuda', 'llama-cuda-runtime'] as const) : []), canRunBigLlm(hw) ? 'model-llm-9b' : 'model-llm-3b']
   },
   {
     id: 'voiceSeparation',
