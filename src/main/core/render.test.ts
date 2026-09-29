@@ -171,17 +171,17 @@ describe('normal export arguments stay pinned', () => {
     ).toMatchInlineSnapshot(`"-hide_banner -nostdin -y -ss 12.500 -t 30.000 -i C:\\clips\\src.mp4 -i v.wav -i g.wav -stream_loop -1 -i m.mp3 -filter_complex [0:v]crop=1918:1078:2:2,split=2[bgsrc][fgsrc];[bgsrc]scale=270:480:force_original_aspect_ratio=increase:flags=bilinear,crop=270:480,gblur=sigma=6,eq=brightness=-0.06,scale=1080:1920:flags=bilinear[bg];[fgsrc]scale=1080:-2:flags=lanczos[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[base];[base]fps=60,ass=captions.ass:fontsdir=fonts,format=yuv420p[vout];[1:a]aresample=48000,aformat=channel_layouts=stereo,asplit=2[voice][voicekey];[2:a]aresample=48000,aformat=channel_layouts=stereo,volume=0.300[game];[3:a]aresample=48000,aformat=channel_layouts=stereo,atrim=0:30.000,volume=0.220,afade=t=in:d=1,afade=t=out:st=28.50:d=1.5[musicraw];[musicraw][voicekey]sidechaincompress=threshold=0.04:ratio=6:attack=20:release=400[music];[voice][game][music]amix=inputs=3:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[aout] -map [vout] -map [aout] -c:a aac -b:a 192k -ar 48000 -c:v h264_nvenc -preset p5 -rc vbr -cq 21 -b:v 0 -maxrate 16M -bufsize 32M -profile:v high -spatial-aq 1 -g 120 -pix_fmt yuv420p -t 30.000 -movflags +faststart -progress pipe:1 -nostats C:\\out\\clip.mp4"`)
   })
   it('horizontal without captions, voice only', () => {
-    expect(line(spec({ format: 'horizontal', assFile: null, audio: { kind: 'stems', voice: 'v.wav', game: null, gameGain: 0, music: null, musicGain: 0 } }))).toMatchInlineSnapshot(`"-hide_banner -nostdin -y -ss 12.500 -t 30.000 -i C:\\clips\\src.mp4 -i v.wav -filter_complex [0:v]crop=1916:1078:4:2,scale=1920:1080:flags=lanczos,setsar=1[base];[base]fps=60,format=yuv420p[vout];[1:a]aresample=48000,aformat=channel_layouts=stereo[voice];[voice]loudnorm=I=-14:TP=-1.5:LRA=11[aout] -map [vout] -map [aout] -c:a aac -b:a 192k -ar 48000 -c:v libx264 -preset veryfast -crf 20 -profile:v high -g 120 -pix_fmt yuv420p -t 30.000 -movflags +faststart -progress pipe:1 -nostats C:\\out\\clip.mp4"`)
+    expect(line(spec({ format: 'horizontal', assFile: null, audio: { kind: 'stems', voice: 'v.wav', game: null, gameGain: 0, music: null, musicGain: 0 } }))).toMatchInlineSnapshot(`"-hide_banner -nostdin -y -ss 12.500 -t 30.000 -i C:\\clips\\src.mp4 -i v.wav -filter_complex [0:v]crop=1920:1080:0:0,scale=1920:1080:flags=lanczos,setsar=1[base];[base]fps=60,format=yuv420p[vout];[1:a]aresample=48000,aformat=channel_layouts=stereo[voice];[voice]loudnorm=I=-14:TP=-1.5:LRA=11[aout] -map [vout] -map [aout] -c:a aac -b:a 192k -ar 48000 -c:v libx264 -preset veryfast -crf 20 -profile:v high -g 120 -pix_fmt yuv420p -t 30.000 -movflags +faststart -progress pipe:1 -nostats C:\\out\\clip.mp4"`)
   })
   it('centre crop, silent, small output size', () => {
     expect(line(spec({ layout: { ...camGame, kind: 'center_crop', cam: null }, audio: { kind: 'silent' }, outputSize: { width: 360, height: 640 } }))).toMatchInlineSnapshot(`"-hide_banner -nostdin -y -ss 12.500 -t 30.000 -i C:\\clips\\src.mp4 -filter_complex [0:v]crop=606:1078:658:2,scale=360:640:flags=lanczos,setsar=1[base];[base]fps=60,ass=captions.ass:fontsdir=fonts,format=yuv420p[vout] -map [vout] -an -c:v libx264 -preset veryfast -crf 20 -profile:v high -g 120 -pix_fmt yuv420p -t 30.000 -movflags +faststart -progress pipe:1 -nostats C:\\out\\clip.mp4"`)
   })
-  it('horizontal with a custom game crop and stems + music', () => {
+  it('horizontal with a full-frame layout custom game crop and stems + music', () => {
     expect(
       line(
         spec({
           format: 'horizontal',
-          layout: { ...camGame, game: { x: 0.1, y: 0.05, w: 0.6, h: 0.8 } },
+          layout: { ...camGame, kind: 'blur_fill', game: { x: 0.1, y: 0.05, w: 0.6, h: 0.8 } },
           audio: { kind: 'stems', voice: 'v.wav', game: null, gameGain: 0, music: 'm.mp3', musicGain: 0.22 },
           encoder: 'h264_amf'
         })

@@ -22,6 +22,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
   const [clips, setClips] = useState<Clip[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [layouts, setLayouts] = useState<Layout[]>([])
+  const [defaultLayoutId, setDefaultLayoutId] = useState<string | null>(null)
   const [exports, setExports] = useState<ExportItem[]>([])
   const [bestOf, setBestOf] = useState<BestOfItem[]>([])
   const [info, setInfo] = useState<AppInfo | null>(null)
@@ -40,7 +41,10 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
       setClips(c)
       setSelected((s) => s ?? c[0]?.id ?? null)
     })
-    void call('layouts:list').then((l) => setLayouts(l.layouts))
+    void call('layouts:list').then((l) => {
+      setLayouts(l.layouts)
+      setDefaultLayoutId(l.defaultId)
+    })
     void call('exports:list', jobId).then(setExports)
     void call('bestOf:list', jobId).then(setBestOf)
     void call('app:info').then(setInfo)
@@ -148,17 +152,14 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
     return () => window.removeEventListener('keydown', onKey)
   }, [clip, editingLayout, togglePlay, update, move])
 
-  async function saveLayout(l: Layout, applyAll: boolean): Promise<void> {
-    setEditingLayout(false)
-    try {
-      await call('layouts:save', l)
-      await call('layouts:setDefault', l.id)
-      setLayouts((await call('layouts:list')).layouts)
-      const targets = applyAll ? (clips ?? []) : clip ? [clip] : []
-      for (const c of targets) await update(c.id, { layoutId: l.id })
-    } catch (err) {
-      setError(errorText(err))
-    }
+  async function useLayout(id: string, applyAll: boolean): Promise<void> {
+    const targets = applyAll ? (clips ?? []) : clip ? [clip] : []
+    for (const c of targets) await update(c.id, { layoutId: id })
+  }
+
+  // A deleted layout falls back to the plain full frame, here and at export.
+  async function layoutDeleted(id: string): Promise<void> {
+    for (const c of clips ?? []) if (c.layoutId === id) await update(c.id, { layoutId: null })
   }
 
   const kept = clips?.filter((c) => c.status === 'accepted') ?? []
@@ -308,6 +309,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
         <Inspector
           clip={clip}
           layouts={layouts}
+          defaultLayoutId={defaultLayoutId}
           time={time}
           voiceAvailable={info?.features.voiceSeparation ?? false}
           onUpdate={(p) => void update(clip.id, p)}
@@ -329,9 +331,16 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
         <LayoutEditor
           src={api.clipUrl(jobId, clip.id)}
           at={Math.max(0, time - clip.source.start)}
-          initial={clip.layoutId ? (layouts.find((l) => l.id === clip.layoutId) ?? null) : (layouts[0] ?? null)}
-          onCancel={() => setEditingLayout(false)}
-          onSave={(l, all) => void saveLayout(l, all)}
+          layouts={layouts}
+          defaultId={defaultLayoutId}
+          clipLayoutId={clip.layoutId}
+          onClose={() => setEditingLayout(false)}
+          onChanged={(list, def) => {
+            setLayouts(list)
+            setDefaultLayoutId(def)
+          }}
+          onDeleted={(id) => void layoutDeleted(id)}
+          onUse={(id, all) => void useLayout(id, all)}
         />
       )}
     </div>
@@ -363,6 +372,7 @@ function AutoEditPreviewPane({ jobId, clip, state }: { jobId: string; clip: Clip
 function Inspector({
   clip,
   layouts,
+  defaultLayoutId,
   time,
   voiceAvailable,
   onUpdate,
@@ -373,6 +383,7 @@ function Inspector({
 }: {
   clip: Clip
   layouts: Layout[]
+  defaultLayoutId: string | null
   time: number
   voiceAvailable: boolean
   onUpdate: (p: ClipPatch) => void
@@ -436,7 +447,7 @@ function Inspector({
         label="Layout"
         right={
           <button type="button" className="btn sm ghost" onClick={onEditLayout}>
-            <Crop size={13} /> {layouts.length ? 'Edit' : 'Mark facecam'}
+            <Crop size={13} /> {layouts.length ? 'Layouts' : 'Mark facecam'}
           </button>
         }
       >
@@ -445,6 +456,7 @@ function Inspector({
           {layouts.map((l) => (
             <option key={l.id} value={l.id}>
               {l.name}
+              {l.id === defaultLayoutId ? ' (default)' : ''}
             </option>
           ))}
         </select>

@@ -897,23 +897,88 @@ kbd {
 /* ---------- layout editor ---------- */
 
 .layout-editor {
-  width: min(980px, calc(100vw - 80px));
+  width: min(1120px, calc(100vw - 80px));
+  display: flex;
+}
+.layout-list {
+  width: 200px;
+  flex: none;
+  padding: 20px 14px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.layout-list h2 {
+  margin: 0 6px;
+}
+.layout-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow: auto;
+}
+.layout-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.layout-item:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.layout-item.on {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.layout-main {
+  flex: 1;
+  min-width: 0;
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
-.layout-canvas {
-  position: relative;
-  background: #000;
+.layout-actions {
+  flex-wrap: wrap;
+}
+.layout-stage {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.layout-preview {
+  flex: none;
   border-radius: 8px;
   overflow: hidden;
+  background: #000;
+  line-height: 0;
+}
+.layout-preview canvas {
+  height: min(356px, calc(100vh - 290px));
+  aspect-ratio: 9 / 16;
+}
+.layout-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: #000;
+  border-radius: 8px;
   aspect-ratio: 16 / 9;
 }
 .layout-canvas video {
   width: 100%;
   height: 100%;
   display: block;
+  border-radius: 8px;
 }
 .rect {
   position: absolute;
@@ -951,6 +1016,28 @@ kbd {
 }
 .rect.game .grip {
   border-color: var(--good);
+}
+.grip.n,
+.grip.s {
+  left: calc(50% - 7px);
+  cursor: ns-resize;
+}
+.grip.e,
+.grip.w {
+  top: calc(50% - 7px);
+  cursor: ew-resize;
+}
+.grip.n {
+  top: -7px;
+}
+.grip.s {
+  bottom: -7px;
+}
+.grip.e {
+  right: -7px;
+}
+.grip.w {
+  left: -7px;
 }
 .grip.nw {
   left: -7px;

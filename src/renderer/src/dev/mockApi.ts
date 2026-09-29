@@ -255,6 +255,7 @@ clips.push({
   autoEdit: true
 })
 let layouts: Layout[] = []
+let defaultLayoutId: string | null = null
 let exports: ExportItem[] = []
 let bestOf: BestOfItem[] = []
 
@@ -337,10 +338,18 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
     setTimeout(() => emit('autoEditPreview:changed', { clipId, status: 'ready', version: 'preview' }), 900)
     return state
   },
-  'layouts:list': () => ({ layouts, defaultId: layouts[0]?.id ?? null }),
+  'layouts:list': () => ({ layouts, defaultId: defaultLayoutId }),
   'layouts:save': (l: Layout) => {
+    // Like the real store: newest first, replaced in place by id.
     layouts = [l, ...layouts.filter((x) => x.id !== l.id)]
     return l
+  },
+  'layouts:delete': (id: string) => {
+    layouts = layouts.filter((x) => x.id !== id)
+    if (defaultLayoutId === id) defaultLayoutId = null
+  },
+  'layouts:setDefault': (id: string | null) => {
+    defaultLayoutId = id && layouts.some((x) => x.id === id) ? id : null
   },
   'exports:list': (jobId: string) => exports.filter((e) => e.jobId === jobId),
   'work:list': () => ({ exports, bestOf }),

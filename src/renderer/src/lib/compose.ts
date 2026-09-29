@@ -1,6 +1,6 @@
 // Draws the review preview on a canvas with the same crop math the export uses.
 
-import { fitAspect, OUTPUT_SIZE, toPixels, verticalGeometry, type RenderFormat } from '@shared/layoutGeometry'
+import { layoutPlan, OUTPUT_SIZE, type RenderFormat } from '@shared/layoutGeometry'
 import type { Layout } from '@shared/types'
 
 export const FALLBACK_LAYOUT: Layout = { id: 'default-blur', name: 'Full frame', kind: 'blur_fill', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } }
@@ -32,14 +32,15 @@ export function drawFrame(ctx: CanvasRenderingContext2D, video: HTMLVideoElement
   const out = OUTPUT_SIZE[format]
   const k = W / out.width
 
-  if (format === 'horizontal') {
-    const g = fitAspect(toPixels(layout.game, src), out.width / out.height, src)
+  const plan = layoutPlan(layout, format, src)
+  if (plan.mode === 'crop') {
+    const g = plan.src
     ctx.drawImage(video, g.x, g.y, g.w, g.h, 0, 0, W, H)
     return
   }
 
-  if (layout.kind === 'blur_fill') {
-    const g = toPixels(layout.game, src)
+  if (plan.mode === 'blur') {
+    const g = plan.src
     // Background: the frame scaled to cover, blurred and slightly darkened.
     const cover = Math.max(W / g.w, H / g.h)
     const bw = g.w * cover
@@ -61,12 +62,7 @@ export function drawFrame(ctx: CanvasRenderingContext2D, video: HTMLVideoElement
     return
   }
 
-  const geo = verticalGeometry(layout, src)
-  if (geo.cam) {
-    const camH = geo.camHeight * k
-    ctx.drawImage(video, geo.cam.x, geo.cam.y, geo.cam.w, geo.cam.h, 0, 0, W, camH)
-    ctx.drawImage(video, geo.game.x, geo.game.y, geo.game.w, geo.game.h, 0, camH, W, H - camH)
-  } else {
-    ctx.drawImage(video, geo.game.x, geo.game.y, geo.game.w, geo.game.h, 0, 0, W, H)
-  }
+  const camH = plan.camHeight * k
+  ctx.drawImage(video, plan.cam.x, plan.cam.y, plan.cam.w, plan.cam.h, 0, 0, W, camH)
+  ctx.drawImage(video, plan.game.x, plan.game.y, plan.game.w, plan.game.h, 0, camH, W, H - camH)
 }

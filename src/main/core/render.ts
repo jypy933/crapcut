@@ -2,7 +2,7 @@
 // processes. The result is passed to execFile/spawn as an array (never a shell).
 
 import type { Layout } from '@shared/types'
-import { fitAspect, OUTPUT_SIZE, toPixels, verticalGeometry, type PixelRect, type RenderFormat, type Size } from '@shared/layoutGeometry'
+import { fitAspect, layoutPlan, OUTPUT_SIZE, stackHeights, toPixels, verticalGeometry, type PixelRect, type RenderFormat, type Size } from '@shared/layoutGeometry'
 
 export { fitAspect, OUTPUT_SIZE, toPixels, verticalGeometry, type PixelRect, type RenderFormat, type Size }
 
@@ -78,34 +78,27 @@ export function layoutBaseFilter(inputPad: string, format: RenderFormat, layout:
   const parts: string[] = []
   const pad = (name: string): string => `[${prefix}${name}]`
 
-  if (format === 'horizontal') {
-    const game = fitAspect(toPixels(layout.game, source), out.width / out.height, source)
-    parts.push(`[${inputPad}]${crop(game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1${pad('base')}`)
-  } else if (layout.kind === 'blur_fill') {
-    const game = toPixels(layout.game, source)
+  const plan = layoutPlan(layout, format, source)
+  if (plan.mode === 'crop') {
+    parts.push(`[${inputPad}]${crop(plan.src)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1${pad('base')}`)
+  } else if (plan.mode === 'blur') {
     // Blur at a quarter of the size (a sigma of 24 at full size is 6 here) and
     // scale the result back up: far fewer pixels for gblur to touch.
     const bg = { width: evenPx(out.width / BLUR_DOWNSCALE), height: evenPx(out.height / BLUR_DOWNSCALE) }
     const sigma = Math.max(1, (24 / BLUR_DOWNSCALE) * (out.width / OUTPUT_SIZE.vertical.width))
-    parts.push(`[${inputPad}]${crop(game)},split=2${pad('bgsrc')}${pad('fgsrc')}`)
+    parts.push(`[${inputPad}]${crop(plan.src)},split=2${pad('bgsrc')}${pad('fgsrc')}`)
     parts.push(
       `${pad('bgsrc')}scale=${bg.width}:${bg.height}:force_original_aspect_ratio=increase:flags=bilinear,crop=${bg.width}:${bg.height},gblur=sigma=${Number(sigma.toFixed(2))},eq=brightness=-0.06,scale=${out.width}:${out.height}:flags=bilinear${pad('bg')}`
     )
     parts.push(`${pad('fgsrc')}scale=${out.width}:-2:flags=lanczos${pad('fg')}`)
     parts.push(`${pad('bg')}${pad('fg')}overlay=(W-w)/2:(H-h)/2,setsar=1${pad('base')}`)
   } else {
-    const g = verticalGeometry(layout, source)
-    if (g.cam) {
-      // The geometry is worked out for the full-size frame; a smaller output keeps its proportions.
-      const camHeight = out.height === OUTPUT_SIZE.vertical.height ? g.camHeight : evenPx((g.camHeight * out.height) / OUTPUT_SIZE.vertical.height)
-      const gameHeight = out.height - camHeight
-      parts.push(`[${inputPad}]split=2${pad('camsrc')}${pad('gamesrc')}`)
-      parts.push(`${pad('camsrc')}${crop(g.cam)},scale=${out.width}:${camHeight}:flags=lanczos,setsar=1${pad('cam')}`)
-      parts.push(`${pad('gamesrc')}${crop(g.game)},scale=${out.width}:${gameHeight}:flags=lanczos,setsar=1${pad('game')}`)
-      parts.push(`${pad('cam')}${pad('game')}vstack=inputs=2${pad('base')}`)
-    } else {
-      parts.push(`[${inputPad}]${crop(g.game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1${pad('base')}`)
-    }
+    // The geometry is worked out for the full-size frame; a smaller output keeps its proportions.
+    const { camHeight, gameHeight } = stackHeights(plan.camHeight, out)
+    parts.push(`[${inputPad}]split=2${pad('camsrc')}${pad('gamesrc')}`)
+    parts.push(`${pad('camsrc')}${crop(plan.cam)},scale=${out.width}:${camHeight}:flags=lanczos,setsar=1${pad('cam')}`)
+    parts.push(`${pad('gamesrc')}${crop(plan.game)},scale=${out.width}:${gameHeight}:flags=lanczos,setsar=1${pad('game')}`)
+    parts.push(`${pad('cam')}${pad('game')}vstack=inputs=2${pad('base')}`)
   }
   return parts
 }
