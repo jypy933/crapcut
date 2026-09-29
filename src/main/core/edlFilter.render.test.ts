@@ -186,6 +186,22 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
     }
   }, 180_000)
 
+  it('renders a vertical blur-fill edit straight to a small preview size', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-preview-'))
+    try {
+      await makeSourceClip(join(dir, 'in.mp4'), 4)
+      const edl = baseEdl({ segments: [seg(0, 4)], zoom: [{ t: 0, scale: 1, ease: 'snap' }, { t: 1, scale: 1.5, ease: 'snap', shakeAmp: 8 }] })
+      const blurFill: Layout = { id: 'b', name: 'Full frame', kind: 'blur_fill', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } }
+      const out = await runEdl(dir, edl, { format: 'vertical', layout: blurFill, outputSize: { width: 360, height: 640 }, fps: 30 })
+      expect(out.width).toBe(360)
+      expect(out.height).toBe(640)
+      expect(out.duration).toBeGreaterThan(outputDuration(edl) - 1 / 30)
+      expect(out.duration).toBeLessThan(outputDuration(edl) + 1 / 30)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 180_000)
+
   it('holds a freeze frame with matching silence', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-freeze-'))
     try {

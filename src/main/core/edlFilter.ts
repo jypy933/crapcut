@@ -87,9 +87,10 @@ export function shakeAmpExpr(zoom: readonly ZoomKeyframe[]): string {
  * (kept even so every chroma plane divides) and overlaid, centred plus shake
  * and clamped so it always covers the frame, on the unscaled frame.
  */
-export function zoomExpr(zoom: readonly ZoomKeyframe[], size: Size): { w: string; h: string; x: string; y: string } {
+export function zoomExpr(zoom: readonly ZoomKeyframe[], size: Size, shakeScale = 1): { w: string; h: string; x: string; y: string } {
   const scale = zoomScaleExpr(zoom)
-  const amp = shakeAmpExpr(zoom)
+  // The keyframes' shake is in full-size output pixels; a smaller frame shakes proportionally less.
+  const amp = shakeScale === 1 ? shakeAmpExpr(zoom) : `${fmtNum(shakeScale)}*(${shakeAmpExpr(zoom)})`
   const w = `trunc(${size.width}*(${scale})/2)*2`
   const h = `trunc(${size.height}*(${scale})/2)*2`
   const shakeX = `(${amp})*sin(2*PI*13*t)`
@@ -104,9 +105,9 @@ export function zoomExpr(zoom: readonly ZoomKeyframe[], size: Size): { w: string
 const escExpr = (s: string): string => s.replace(/,/g, '\\,')
 
 /** Scales `pad` up per frame and overlays it on itself; returns the new pad, or `pad` when there is no zoom. */
-function spliceZoom(parts: string[], pad: string, zoom: readonly ZoomKeyframe[], size: Size): string {
+function spliceZoom(parts: string[], pad: string, zoom: readonly ZoomKeyframe[], size: Size, shakeScale: number): string {
   if (zoom.length === 0) return pad
-  const { w, h, x, y } = zoomExpr(zoom, size)
+  const { w, h, x, y } = zoomExpr(zoom, size, shakeScale)
   parts.push(`[${pad}]split=2[vzmain][vzsrc]`)
   parts.push(`[vzsrc]scale=w=${escExpr(w)}:h=${escExpr(h)}:eval=frame:flags=bicubic[vzbig]`)
   parts.push(`[vzmain][vzbig]overlay=x=${escExpr(x)}:y=${escExpr(y)}:eval=frame:format=yuv420[vzoom]`)
@@ -266,7 +267,13 @@ export interface EdlRenderSpec {
   /** Where the filter graph is written; passed to FFmpeg with `-filter_complex_script`. */
   filterScript: string
   output: string
+  /** Output frame size; the format's full size when omitted (a small preview passes its own). */
+  outputSize?: Size
+  /** Output frame rate; the source's, clamped to 24-60, when omitted. */
+  fps?: number
 }
+
+const edlFps = (spec: EdlRenderSpec): number => spec.fps ?? clampFps(spec.sourceFps)
 
 function assStage(pad: string, parts: string[], assFile: string | null, fontsDir: string | null, outName: string): string {
   if (!assFile) return pad
@@ -279,8 +286,8 @@ function assStage(pad: string, parts: string[], assFile: string | null, fontsDir
 /** The video half of the graph, ending in `[vout]`. */
 export function edlVideoFilter(spec: EdlRenderSpec): string {
   const parts: string[] = []
-  const out = OUTPUT_SIZE[spec.format]
-  const fps = clampFps(spec.sourceFps)
+  const out = spec.outputSize ?? OUTPUT_SIZE[spec.format]
+  const fps = edlFps(spec)
   const mainDuration = concatDuration(spec.edl.segments) + freezeTotal(spec.edl.freeze)
   const total = outputDuration(spec.edl)
 
@@ -288,9 +295,9 @@ export function edlVideoFilter(spec: EdlRenderSpec): string {
   const vfz = spliceFreezeVideo(parts, vseg, spec.edl.freeze, fps)
 
   parts.push(`[${vfz}]fps=${fps}[vfps]`)
-  parts.push(...layoutBaseFilter('vfps', spec.format, spec.layout, spec.source))
+  parts.push(...layoutBaseFilter('vfps', spec.format, spec.layout, spec.source, out))
 
-  let pad = spliceZoom(parts, 'base', spec.edl.zoom, out)
+  let pad = spliceZoom(parts, 'base', spec.edl.zoom, out, out.width / OUTPUT_SIZE[spec.format].width)
 
   pad = assStage(pad, parts, spec.captionsAssFile, spec.fontsDir, 'vcap')
   pad = assStage(pad, parts, spec.overlayAssFile, spec.fontsDir, 'vovl')
@@ -384,7 +391,7 @@ export function edlToFilterGraph(spec: EdlRenderSpec): { graph: string; audioInp
 /** Full FFmpeg argument list for one EDL re-edit. The caller must have already written `spec.filterScript` with `edlToFilterGraph(spec).graph`. */
 export function buildEdlRenderArgs(spec: EdlRenderSpec): string[] {
   const { audioInputs } = edlToFilterGraph(spec)
-  const fps = clampFps(spec.sourceFps)
+  const fps = edlFps(spec)
   const args = ['-hide_banner', '-nostdin', '-y']
   if (spec.seek) args.push('-ss', spec.seek.toFixed(3))
   if (spec.duration) args.push('-t', spec.duration.toFixed(3))
