@@ -33,6 +33,8 @@ const baseClip = (over: Partial<Clip> = {}): Clip => ({
   formats: { vertical: true, horizontal: false },
   reason: 'Chat spike',
   signals: null,
+  structureDecision: { structure: 'tightCut', loopEnding: false, emphasisWords: [], reasons: ['plain cut, nothing else stood out'] },
+  autoEdit: true,
   ...over
 })
 
@@ -41,6 +43,14 @@ function oldRow(over: Partial<Clip> = {}): Clip {
   const clip = baseClip(over) as unknown as Record<string, unknown>
   delete clip.chatMessages
   delete clip.chatOverlay
+  return clip as unknown as Clip
+}
+
+/** A row saved by a database from before the automatic viral edit: no autoEdit/structureDecision at all. */
+function preAutoEditRow(over: Partial<Clip> = {}): Clip {
+  const clip = baseClip(over) as unknown as Record<string, unknown>
+  delete clip.autoEdit
+  delete clip.structureDecision
   return clip as unknown as Clip
 }
 
@@ -75,6 +85,31 @@ describe('needsNormalizing / normalizeClip (pure)', () => {
     const clip = baseClip({ chatMessages: own, chatOverlay: true })
     const next = normalizeClip(clip, [{ t: 2, user: 'y', text: 'other' }])
     expect(next).toEqual(clip)
+  })
+
+  it('flags a clip missing autoEdit or structureDecision', () => {
+    expect(needsNormalizing(preAutoEditRow())).toBe(true)
+
+    const noAutoEdit = baseClip() as unknown as Record<string, unknown>
+    delete noAutoEdit.autoEdit
+    expect(needsNormalizing(noAutoEdit as unknown as Clip)).toBe(true)
+
+    expect(needsNormalizing(baseClip({ structureDecision: null }))).toBe(true)
+  })
+
+  it('fills in a default autoEdit and computes a structure decision heuristically', () => {
+    const next = normalizeClip(preAutoEditRow(), [])
+    expect(next.autoEdit).toBe(true)
+    expect(next.structureDecision).not.toBeNull()
+    expect(next.structureDecision!.structure).toBeDefined()
+  })
+
+  it('keeps an existing autoEdit choice and decision instead of recomputing', () => {
+    const decision = { structure: 'tightCut' as const, loopEnding: false, emphasisWords: [], reasons: ['kept'] }
+    const clip = baseClip({ autoEdit: false, structureDecision: decision })
+    const next = normalizeClip(clip, [])
+    expect(next.autoEdit).toBe(false)
+    expect(next.structureDecision).toBe(decision)
   })
 })
 
