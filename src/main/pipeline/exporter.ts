@@ -212,9 +212,15 @@ export class Exporter {
     return this.getEncoder(this.tools.require('ffmpeg'))
   }
 
-  /** Renders one kept clip as 16:9 to an arbitrary file, for the best-of joiner. */
+  /**
+   * Renders one kept clip as 16:9 to an arbitrary file, for the best-of
+   * joiner. Always the plain clip, never its automatic edit: a per-clip loop
+   * ending, freeze or punch-in is built for a clip watched on its own, and
+   * fights the best-of's own crossfade join between clips -- a continuous
+   * reel reads better as one plain, steady cut from clip to clip.
+   */
   async renderForBestOf(clip: Clip, workDir: string, outputPath: string, signal: AbortSignal, onProgress: (f: number, etaSec: number | null) => void): Promise<void> {
-    await renderClipToFile(this.deps(), clip, 'horizontal', workDir, outputPath, signal, onProgress)
+    await renderClipToFile(this.deps(), { ...clip, autoEdit: false }, 'horizontal', workDir, outputPath, signal, onProgress)
   }
 
   private async render(item: ExportItem, signal: AbortSignal, onProgress: (f: number, eta: number | null) => void): Promise<string> {
