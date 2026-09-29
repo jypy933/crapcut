@@ -144,6 +144,29 @@ median about 30 ms, 90% within 90 ms; a word is on screen over a pause for
 (`pipeline/wordTiming.render.test.ts` reports and checks this on Windows). DTW
 costs about 15-30% more transcription time (flash attention has to be off).
 
+Invented words (measured on 20 min of real VOD audio, generated silence, noise,
+chords and impacts, and the Windows-voice speech, with the large model on Vulkan
+and the small one on the CPU): VAD is what stops them. Without it whisper
+answers every silent or noisy stretch with "Thank you." at the start of its 30 s
+windows, writes "*Dramatic music*" or "ORGAN PLAYS" over game sound and sings
+song lyrics (loops doubled, 76 to 148 words); with it, generated non-speech gives
+0 words and real VODs show no such lines. No decoder or VAD knob beat the current
+arguments: `-nth`, `-et`, `-tpi 0`/`-nf` changed nothing; `-lpt`, `-sns` and
+`-mc 0` only reworded 40-50 real words (`-lpt -0.5` turned sung lyrics into
+different nonsense); `-vt 0.6/0.7`, `-vspd 400/600` and `-vp 0/100` lost or
+added 65-160 real words for at most 53 fewer suspect ones, and `-vsd 300` and
+`-vp 0` move the spans that word timing rests on. Word probability does not
+separate them either (the invented "Thank you." and "*Dramatic music*" have
+p near 1.0), an all-caps rule hits real acronyms (PPC, RFC) and a
+words-per-second rule hits real "No, no, no." (8-15 words/s), and a word's voice
+energy mostly finds DTW's zero-length first word of a stretch. So only two
+small filters ship: `core/soundMarkers.ts` drops a sound description that
+`-ml 1` split over several words, and, when a chunk ran without the VAD model,
+`dropIsolatedFiller` drops a "Thank you." with 4 s of nothing either side.
+Repeat loops are still handled where they are judged and shown
+(`shared/transcriptLoops.ts`). `pipeline/antiHallucination.render.test.ts` counts
+invented words on generated audio and missed/extra words on speech.
+
 A chunk cut in the middle of a word makes whisper carry on past the end of the
 audio, stamping the invented words at one instant; `dropTailPileup` keeps only
 the first, and `mergeChunks` keeps a word both sides of a seam heard once.

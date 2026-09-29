@@ -42,7 +42,7 @@ import { pickStructure } from '../core/structurePick'
 import { pickStructureWithLlm, STRUCTURE_SYSTEM_PROMPT } from '../core/structureLlm'
 import { computeSignals } from '../core/structureSignals'
 import { deriveTasteAdjustments, type TasteAdjustments } from '../core/taste'
-import { assessSpeech, findBadTranscriptRanges, judgeSpeech } from '../core/transcriptQuality'
+import { assessSpeech, dropIsolatedFiller, findBadTranscriptRanges, judgeSpeech } from '../core/transcriptQuality'
 import { DtwGate } from '../core/dtwGate'
 import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
 import type { AppPaths } from '../paths'
@@ -298,7 +298,8 @@ async function transcribe(ctx: StepContext): Promise<void> {
         language = parsed.language
         writeFileSync(langFile, language)
       }
-      let words = parsed.words
+      // Without VAD whisper answers silence with "Thank you."; with it, the line is real speech.
+      let words = result.vad ? parsed.words : dropIsolatedFiller(parsed.words)
       if (words.some((w) => isStretchedWord(w))) {
         // The chunk's own WAV is still on disk (chunk-relative time, matching
         // whisper's words): find where each stretched word's speech really is.
@@ -857,7 +858,7 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
         }
         const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`), result)
         noteDtw(ctx.log, dtwGate, clip.id, result, parsed)
-        let words = parsed.words
+        let words = result.vad ? parsed.words : dropIsolatedFiller(parsed.words)
         if (words.some((w) => isStretchedWord(w))) {
           try {
             const pcm = await extractPcm(ffmpeg, wav, 0, range.end - range.start, ctx.signal)

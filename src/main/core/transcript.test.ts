@@ -50,6 +50,11 @@ describe('parseWhisperJson', () => {
     ])
   })
 
+  it('drops a sound description that -ml 1 split into one segment per word', () => {
+    const r = parseWhisperJson({ transcription: [seg(0, 200, ' Okay'), seg(200, 500, ' *Dramatic'), seg(500, 900, ' music*'), seg(900, 1100, ' ♪'), seg(1100, 1300, ' la'), seg(1300, 1500, ' ♪'), seg(1500, 1800, ' f***ing'), seg(1800, 2000, ' go')] })
+    expect(r.words.map((w) => w.text)).toEqual(['Okay', 'f***ing', 'go'])
+  })
+
   it('drops speaker dashes and bare punctuation', () => {
     const r = parseWhisperJson({ transcription: [seg(0, 100, ' -'), seg(100, 300, ' - You'), seg(300, 500, ' ...'), seg(500, 700, ' go')] })
     expect(r.words.map((w) => w.text)).toEqual(['You', 'go'])

@@ -5,25 +5,15 @@
 // build, so it measures what a real job gets. Skips cleanly off Windows, or
 // when FFmpeg, the voice or the speech tools are missing.
 
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { envelope } from '../core/align'
 import { parseWhisperJson } from '../core/transcript'
 import { runTool } from '../tools/process'
 import { ToolRegistry } from '../tools/registry'
 import { dtwPreset, whisperChunk } from './ai'
-
-function findOnPath(name: string): string | null {
-  try {
-    const out = execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { encoding: 'utf8' })
-    return out.split(/\r?\n/).find((l) => l.trim())?.trim() || null
-  } catch {
-    return null
-  }
-}
+import { findOnPath, norm, pair, pauseFrames, pct, secondsOverSilence, speak, truthEnds, voicedFrames, FRAME, VOICES } from './speechTestKit'
 
 const ffmpeg = findOnPath(process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
 const toolsDir = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'CrapCut', 'tools') : null
@@ -33,120 +23,6 @@ const whisper = registry?.path('whisper-cpu') ?? null
 const small = registry?.path('model-whisper-small') ?? null
 const model = small ?? registry?.path('model-whisper-large') ?? null
 const vad = registry?.path('model-vad') ?? null
-
-const VOICES = ['Microsoft David Desktop', 'Microsoft Zira Desktop']
-
-const ssml = (voice: string): string => `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US"><voice name="${voice}">
-<break time="1500ms"/>Wait, wait, wait. Did you see that?
-<break time="1800ms"/>No way he just jumped off the bridge with the whole squad behind him.
-<break time="700ms"/>Chat, I am not doing that again.
-<break time="2500ms"/>Okay.
-<break time="1200ms"/>Why is it always the same thing, my brother?
-<break time="400ms"/>Every single time.
-<break time="1500ms"/></voice></speak>`
-
-// Writes the voice's audio as 16 kHz mono WAV and one "ms<TAB>word" line per word.
-const SPEAK = `
-param([string]$Dir)
-Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
-$s.SetOutputToWaveFile((Join-Path $Dir 'speech.wav'), $fmt)
-$global:words = New-Object System.Collections.ArrayList
-$s.add_SpeakProgress({ param($x, $e) [void]$global:words.Add("$($e.AudioPosition.TotalMilliseconds)\`t$($e.Text)") })
-$s.SpeakSsml((Get-Content (Join-Path $Dir 'speech.ssml') -Raw))
-$s.Dispose()
-$global:words | Out-File -Encoding utf8 (Join-Path $Dir 'words.tsv')
-`
-
-function speak(dir: string, voice: string): { t0: number; text: string }[] | null {
-  if (process.platform !== 'win32') return null
-  writeFileSync(join(dir, 'speech.ssml'), ssml(voice))
-  writeFileSync(join(dir, 'speak.ps1'), SPEAK)
-  try {
-    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(dir, 'speak.ps1'), '-Dir', dir], { stdio: 'ignore', timeout: 60_000 })
-    return readFileSync(join(dir, 'words.tsv'), 'utf8')
-      .replace(/^﻿/, '')
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((l) => {
-        const [ms, text] = l.split('\t')
-        return { t0: Number(ms) / 1000, text: text ?? '' }
-      })
-  } catch {
-    return null
-  }
-}
-
-const norm = (s: string): string => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
-
-/** Pairs each spoken word with the transcribed word of the same text, in order. */
-function pair(truth: { t0: number; text: string }[], got: { t0: number; text: string }[]): [number, number][] {
-  const out: [number, number][] = []
-  let j = 0
-  for (const t of truth) {
-    const k = got.findIndex((g, i) => i >= j && i <= j + 3 && norm(g.text) === norm(t.text))
-    if (k < 0) continue
-    out.push([t.t0, got[k]!.t0])
-    j = k + 1
-  }
-  return out
-}
-
-const FRAME = 0.01
-
-/** The clean voice as 10 ms frames: true where the voice is speaking (louder than -40 dB of its peak). */
-function voicedFrames(wavPath: string): boolean[] {
-  const buf = readFileSync(wavPath)
-  let at = 12
-  while (at + 8 <= buf.length && buf.toString('latin1', at, at + 4) !== 'data') at += 8 + buf.readUInt32LE(at + 4)
-  const start = at + 8
-  const pcm = new Float32Array(Math.floor((buf.length - start) / 2))
-  for (let i = 0; i < pcm.length; i++) pcm[i] = buf.readInt16LE(start + i * 2) / 32768
-  const env = envelope(pcm, 16000, FRAME)
-  const peak = env.reduce((m, v) => Math.max(m, v), 0)
-  return Array.from(env, (v) => v > peak * 0.01)
-}
-
-/** Frames inside a pause of at least 120 ms (shorter dips are stops inside words, not pauses). */
-function pauseFrames(voiced: boolean[]): boolean[] {
-  const out = voiced.map(() => false)
-  for (let i = 0; i < voiced.length; ) {
-    if (voiced[i]) {
-      i++
-      continue
-    }
-    let j = i
-    while (j < voiced.length && !voiced[j]) j++
-    if (j - i >= 12) for (let k = i; k < j; k++) out[k] = true
-    i = j
-  }
-  return out
-}
-
-/**
- * Where the voice really stops after each word: where the next pause starts,
- * or else where the next word does. (The voice reports a word after a pause a
- * few frames before it is audible, so the pause it starts in is skipped.)
- */
-function truthEnds(truth: { t0: number }[], voiced: boolean[], pause: boolean[]): number[] {
-  return truth.map((w, i) => {
-    const to = Math.min(pause.length, Math.round((truth[i + 1]?.t0 ?? pause.length * FRAME) / FRAME))
-    let f = Math.round(w.t0 / FRAME)
-    while (f < to && !voiced[f]) f++
-    while (f < to && !pause[f]) f++
-    return f * FRAME
-  })
-}
-
-/** Seconds during which some word is on screen while the voice is in a pause. */
-function secondsOverSilence(words: { t0: number; t1: number }[], pause: boolean[]): number {
-  let sum = 0
-  for (const w of words) for (let f = Math.max(0, Math.floor(w.t0 / FRAME)); f < Math.min(pause.length, Math.ceil(w.t1 / FRAME)); f++) if (pause[f]) sum += FRAME
-  return sum
-}
-
-const pct = (sorted: number[], q: number): number => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))]!
 
 describe.skipIf(!ffmpeg || !whisper || !model || process.platform !== 'win32')('caption word timing (real speech with known word times)', () => {
   it.each(VOICES)('puts words on the voice, never well ahead of it (%s)', async (voice) => {

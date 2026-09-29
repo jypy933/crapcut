@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Range, Word } from '@shared/types'
-import { assessSpeech, DEFAULT_QUALITY_OPTIONS, findBadTranscriptRanges, judgeSpeech } from './transcriptQuality'
+import { assessSpeech, DEFAULT_QUALITY_OPTIONS, dropIsolatedFiller, findBadTranscriptRanges, judgeSpeech } from './transcriptQuality'
 
 /** A run of words `step` seconds apart, each lasting `dur` seconds, starting at `t`. */
 function phrase(t: number, texts: string[], step = 0.4, dur = 0.3): Word[] {
@@ -115,5 +115,27 @@ describe('assessSpeech and judgeSpeech', () => {
     const assessment = assessSpeech(window, words, [])
     expect(assessment.noSpeech).toBe(true)
     expect(judgeSpeech(assessment, 0, 0)).toBe('drop')
+  })
+})
+
+describe('dropIsolatedFiller', () => {
+  it('removes a "Thank you." with nothing said around it', () => {
+    const words = [...phrase(0, ['so', 'that', 'was', 'it.']), ...phrase(30, ['Thank', 'you.']), ...phrase(60, ['and', 'then', 'we', 'left.'])]
+    expect(dropIsolatedFiller(words).map((w) => w.text)).toEqual(['so', 'that', 'was', 'it.', 'and', 'then', 'we', 'left.'])
+  })
+
+  it('keeps one said between other words, or close to them', () => {
+    const inside = [...phrase(0, ['nice', 'one.']), ...phrase(1.5, ['Thank', 'you.']), ...phrase(3, ['really', 'good.'])]
+    expect(dropIsolatedFiller(inside)).toEqual(inside)
+    const oneSided = [...phrase(0, ['Thank', 'you.']), ...phrase(40, ['later', 'on.'])]
+    expect(dropIsolatedFiller(oneSided).map((w) => w.text)).toEqual(['later', 'on.'])
+    const afterSpeech = [...phrase(0, ['ok', 'bye.']), ...phrase(2, ['Thank', 'you.']), ...phrase(50, ['hm.'])]
+    expect(dropIsolatedFiller(afterSpeech)).toEqual(afterSpeech)
+  })
+
+  it('leaves other isolated words and empty lists alone', () => {
+    const words = phrase(30, ['Yes.'])
+    expect(dropIsolatedFiller(words)).toBe(words)
+    expect(dropIsolatedFiller([])).toEqual([])
   })
 })

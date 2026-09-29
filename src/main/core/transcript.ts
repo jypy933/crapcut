@@ -5,6 +5,7 @@
 import type { Range, Word } from '@shared/types'
 import { DEFAULT_WORD_TIMING, isStretchedWord, maxPlausibleDuration, type WordTimingOptions } from '@shared/wordTiming'
 import { locateWordEnergy } from './align'
+import { soundMarkerMask } from './soundMarkers'
 
 /**
  * Splits [0, duration) into chunks of about `chunkSec`, moving each cut to the
@@ -136,8 +137,9 @@ export function parseWhisperJson(json: unknown, timing?: WhisperTiming): { langu
   const language = typeof obj.result?.language === 'string' ? obj.result.language : null
   const segs = Array.isArray(obj.transcription) ? (obj.transcription as WhisperSegment[]) : []
   const words: ParsedWord[] = []
-  for (const seg of segs) {
-    if (!seg || typeof seg !== 'object') continue
+  const inMarker = soundMarkerMask(segs.map((seg) => (seg && typeof seg.text === 'string' ? seg.text : '')))
+  for (const [i, seg] of segs.entries()) {
+    if (!seg || typeof seg !== 'object' || inMarker[i]) continue
     const raw = typeof seg.text === 'string' ? seg.text : ''
     const from = Number(seg.offsets?.from)
     const to = Number(seg.offsets?.to)

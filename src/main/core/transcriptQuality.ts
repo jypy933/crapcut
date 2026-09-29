@@ -101,6 +101,31 @@ function fillerSpans(words: Word[]): BadSpan[] {
   return out
 }
 
+/** A hallucinated filler line has no speech within this many seconds of it on either side. */
+export const ISOLATED_FILLER_GAP_SEC = 4
+
+/**
+ * Removes known filler lines ("Thank you.") with nothing said for
+ * `gapSec` before and after. Only for transcripts made without VAD: there
+ * whisper fills every silent or noisy stretch with "Thank you." at the start
+ * of its 30 s windows (measured: 2 per minute on silence, noise, music and
+ * game sound alike, all gone with VAD on). With VAD on the line is real
+ * speech far more often than not, so this is not applied there.
+ */
+export function dropIsolatedFiller(words: Word[], gapSec = ISOLATED_FILLER_GAP_SEC): Word[] {
+  const drop = new Uint8Array(words.length)
+  for (const span of fillerSpans(words)) {
+    let first = words.findIndex((w) => w.t0 >= span.start)
+    if (first < 0) continue
+    let last = first
+    while (last + 1 < words.length && words[last + 1]!.t1 <= span.end) last++
+    const before = first > 0 ? span.start - words[first - 1]!.t1 : Infinity
+    const after = last + 1 < words.length ? words[last + 1]!.t0 - span.end : Infinity
+    if (before >= gapSec && after >= gapSec) for (; first <= last; first++) drop[first] = 1
+  }
+  return drop.some(Boolean) ? words.filter((_, i) => !drop[i]) : words
+}
+
 /** Sliding windows of low lexical variety: the same handful of words shuffled over and over, not a real sentence. */
 function diversitySpans(words: Word[], opts: QualityOptions): BadSpan[] {
   const out: BadSpan[] = []
