@@ -1,9 +1,20 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { captionAt, clipWords, displayText, groupWords, isKeywordWord } from '@shared/captions'
+import { captionY, placeCaptionY, resetCaptionY, withCaptionY } from '@shared/captionPlacement'
 import { captionStyle } from '@shared/captionStyles'
-import { buildChatOverlay, chatOverlayGeometry, DEFAULT_CHAT_OVERLAY_OPTIONS } from '@shared/chatOverlay'
+import {
+  buildChatOverlay,
+  chatBoxNorm,
+  chatOverlayGeometry,
+  chatPosition,
+  DEFAULT_CHAT_OVERLAY_OPTIONS,
+  placeChatBox,
+  resetChatPosition,
+  withChatPosition
+} from '@shared/chatOverlay'
 import { OUTPUT_SIZE, type RenderFormat } from '@shared/layoutGeometry'
-import type { Clip, Layout } from '@shared/types'
+import { pointerToNorm, safeArea, type FormatPositions, type NormPos } from '@shared/overlayPosition'
+import type { CaptionSettings, Clip, Layout } from '@shared/types'
 import { drawFrame } from '../lib/compose'
 import { Spinner } from './ui'
 
@@ -19,15 +30,21 @@ interface Props {
   /** Reports the playhead's VOD time, throttled while playing. */
   onTime: (t: number) => void
   onPlaying: (p: boolean) => void
-  onCaptionY: (y: number) => void
+  /** He moved (or reset) the captions; the settings to save. */
+  onCaptions: (captions: CaptionSettings) => void
+  /** He moved (or reset) the chat box; the positions to save. */
+  onChatPos: (pos: FormatPositions) => void
 }
 
-export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying, onCaptionY }: Props): ReactNode {
+/** What is being dragged, with the frame lines it is currently snapped to (for the guides). */
+type Drag = { kind: 'caption'; y: number; guide: number | null } | { kind: 'chat'; pos: NormPos; guideX: number | null; guideY: number | null }
+
+export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying, onCaptions, onChatPos }: Props): ReactNode {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [ready, setReady] = useState(false)
-  const [dragY, setDragY] = useState<number | null>(null)
+  const [drag, setDrag] = useState<Drag | null>(null)
   // The playhead, updated every drawn frame. Only this component follows it
   // that closely; the parent gets a throttled copy so the whole Review screen
   // does not re-render at the display's refresh rate.
@@ -139,7 +156,8 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
   const groups = useMemo(() => groupWords(clipWords(clip.words, clip.start, clip.end)), [clip.words, clip.start, clip.end])
   const now = captionAt(groups, time - clip.start)
   const style = useMemo(() => captionStyle(clip.captions.styleId), [clip.captions.styleId])
-  const y = dragY ?? (format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1)))
+  // The caption's height comes from the same pure mapping the ASS export uses.
+  const y = drag?.kind === 'caption' ? drag.y : captionY(clip.captions, format)
   const fontPx = size.h * (format === 'vertical' ? 88 / 1920 : 72 / 1080)
   const strokePx = style.box ? 0 : size.h * (format === 'vertical' ? (7 * 2) / 1920 : (6 * 2) / 1080) * style.outlineScale
 
@@ -148,10 +166,20 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
   // normalises on read, but this stays cheap insurance).
   const chatMessages = clip.chatMessages ?? []
   const out = OUTPUT_SIZE[format]
-  const captionYForChat = clip.captions.enabled ? (format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1))) : null
+  const chatOn = (clip.chatOverlay ?? false) && chatMessages.length > 0
+  const captionYForChat = clip.captions.enabled ? y : null
+  const chatPos = drag?.kind === 'chat' ? drag.pos : chatPosition(clip.chatPos, format)
+  // Its default place (also the snap target), and the size it keeps once he has placed it.
+  const chatHome = useMemo(() => chatBoxNorm(chatOverlayGeometry(format, layout, naturalSize, captionYForChat), format), [format, layout, naturalSize, captionYForChat])
+  const chatFree = useMemo(
+    () => chatBoxNorm(chatOverlayGeometry(format, layout, naturalSize, null, DEFAULT_CHAT_OVERLAY_OPTIONS, { x: 0, y: 0 }), format),
+    [format, layout, naturalSize]
+  )
   const chatGeometry = useMemo(
-    () => ((clip.chatOverlay ?? false) && chatMessages.length > 0 ? chatOverlayGeometry(format, layout, naturalSize, captionYForChat) : null),
-    [clip.chatOverlay, chatMessages.length, format, layout, naturalSize, captionYForChat]
+    () => (chatOn ? chatOverlayGeometry(format, layout, naturalSize, captionYForChat, DEFAULT_CHAT_OVERLAY_OPTIONS, chatPos) : null),
+    // chatPos is a fresh object each render; its two numbers are what matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chatOn, format, layout, naturalSize, captionYForChat, chatPos?.x, chatPos?.y]
   )
   const chatLines = useMemo(
     () => (chatGeometry ? buildChatOverlay(chatMessages, clip.start, clip.end, chatGeometry) : []),
@@ -161,22 +189,60 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
   const activeChat = chatLines.filter((l) => chatNow >= l.start && chatNow < l.end)
   const chatFontPx = size.h * (DEFAULT_CHAT_OVERLAY_OPTIONS.fontSize / out.height)
 
-  function startDrag(e: React.PointerEvent): void {
-    if (format !== 'vertical') return
-    const frame = (e.currentTarget as HTMLElement).parentElement!
-    const rect = frame.getBoundingClientRect()
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    const move = (ev: PointerEvent): void => setDragY(Math.max(0.08, Math.min(0.92, (ev.clientY - rect.top) / rect.height)))
-    const up = (ev: PointerEvent): void => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      const finalY = Math.max(0.08, Math.min(0.92, (ev.clientY - rect.top) / rect.height))
-      setDragY(null)
-      onCaptionY(Math.round(finalY * 1000) / 1000)
+  // Dragging: the pointer's movement over the frame, as fractions of it, moves
+  // an overlay from where it started; the shared placement rules limit and
+  // snap it (hold Alt to move freely), and the result is what gets saved and
+  // exported. A click without movement saves nothing.
+  function startDrag(e: React.PointerEvent, move: (dx: number, dy: number, free: boolean) => Drag, commit: (d: Drag) => void): void {
+    if (e.button !== 0) return
+    const target = e.currentTarget as HTMLElement
+    const frame = target.parentElement!.getBoundingClientRect()
+    const from = pointerToNorm(e.clientX, e.clientY, frame)
+    target.setPointerCapture(e.pointerId)
+    let last: Drag | null = null
+    const onMove = (ev: PointerEvent): void => {
+      const p = pointerToNorm(ev.clientX, ev.clientY, frame)
+      last = move(p.x - from.x, p.y - from.y, ev.altKey)
+      setDrag(last)
     }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      setDrag(null)
+      if (last) commit(last)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
+
+  function dragCaption(e: React.PointerEvent): void {
+    startDrag(
+      e,
+      (_dx, dy, free) => ({ kind: 'caption', ...placeCaptionY(y + dy, format, { snap: !free, verticalY: clip.captions.y }) }),
+      (d) => {
+        if (d.kind === 'caption') onCaptions(withCaptionY(clip.captions, format, d.y))
+      }
+    )
+  }
+
+  function dragChat(e: React.PointerEvent): void {
+    if (!chatGeometry) return
+    const at = chatBoxNorm(chatGeometry, format)
+    startDrag(
+      e,
+      (dx, dy, free) => ({ kind: 'chat', ...placeChatBox({ x: at.x + dx, y: at.y + dy }, chatFree, format, chatHome, { snap: !free }) }),
+      (d) => {
+        if (d.kind === 'chat') onChatPos(withChatPosition(clip.chatPos, format, d.pos))
+      }
+    )
+  }
+
+  // While dragging: what the short-video apps cover, and the line the overlay is snapped to.
+  const covered = drag ? safeArea(format).covered : []
+  const guideY = drag?.kind === 'caption' ? drag.guide : drag?.kind === 'chat' ? drag.guideY : null
+  const guideX = drag?.kind === 'chat' ? drag.guideX : null
 
   return (
     <div className="viewport" ref={box}>
@@ -188,20 +254,28 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
             <Spinner size={18} />
           </div>
         )}
-        {dragY !== null && <div className="cap-guide" style={{ top: `${dragY * 100}%` }} />}
+        {covered.map((r, i) => (
+          <div
+            key={i}
+            className="safe-zone"
+            style={{ left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` }}
+          />
+        ))}
+        {guideY !== null && <div className="snap-guide h" style={{ top: `${guideY * 100}%` }} />}
+        {guideX !== null && <div className="snap-guide v" style={{ left: `${guideX * 100}%` }} />}
         {clip.captions.enabled && now && (
           <div
-            className={`cap${style.box ? ' boxed' : ''}`}
+            className={`cap${style.box ? ' boxed' : ''}${drag?.kind === 'caption' ? ' dragging' : ''}`}
             style={{
               top: `${y * 100}%`,
               fontSize: fontPx,
               fontFamily: style.cssFontFamily,
               color: style.textColor,
-              WebkitTextStrokeWidth: strokePx,
-              cursor: format === 'vertical' ? 'ns-resize' : 'default'
+              WebkitTextStrokeWidth: strokePx
             }}
-            onPointerDown={startDrag}
-            title={format === 'vertical' ? 'Drag to move the captions' : undefined}
+            onPointerDown={dragCaption}
+            onDoubleClick={() => onCaptions(resetCaptionY(clip.captions, format))}
+            title="Drag to move the captions, double-click to reset"
           >
             {now.group.words.map((w, i) => {
               const active = i === now.active
@@ -219,15 +293,18 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
             })}
           </div>
         )}
-        {chatGeometry && activeChat.length > 0 && (
+        {chatGeometry && (
           <div
-            className="chat-box"
+            className={`chat-box${drag?.kind === 'chat' ? ' dragging' : ''}`}
             style={{
               top: `${(chatGeometry.y / out.height) * 100}%`,
               left: `${(chatGeometry.x / out.width) * 100}%`,
               width: `${(chatGeometry.w / out.width) * 100}%`,
               height: `${(chatGeometry.h / out.height) * 100}%`
             }}
+            onPointerDown={dragChat}
+            onDoubleClick={() => onChatPos(resetChatPosition(clip.chatPos, format))}
+            title="Drag to move the chat, double-click to reset"
           >
             {activeChat.map((l, i) => (
               <div

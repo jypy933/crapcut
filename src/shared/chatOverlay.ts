@@ -9,6 +9,7 @@
 
 import { assEscape, inlineColor } from './assText'
 import { OUTPUT_SIZE, verticalGeometry, type RenderFormat, type Size } from './layoutGeometry'
+import { boxSnapTargets, clampBoxPos, roundNorm, safeArea, snapAxisHome, type FormatPositions, type NormPos } from './overlayPosition'
 import type { ChatMessage, Layout } from './types'
 
 export interface ChatOverlayOptions {
@@ -108,14 +109,18 @@ export interface ChatOverlayGeometry {
 /**
  * Where the chat box goes for this format/layout: below the facecam when
  * there is one, above the caption band, anchored to a corner so it never
- * fights for the centre of the frame.
+ * fights for the centre of the frame. `pos`, when he dragged the box
+ * somewhere, is its top-left corner (fractions of the output frame) and
+ * replaces that default place; the box keeps its full size then, since he
+ * chose the spot and the caption band no longer shortens it.
  */
 export function chatOverlayGeometry(
   format: RenderFormat,
   layout: Layout,
   source: Size,
   captionY: number | null,
-  opts: ChatOverlayOptions = DEFAULT_CHAT_OVERLAY_OPTIONS
+  opts: ChatOverlayOptions = DEFAULT_CHAT_OVERLAY_OPTIONS,
+  pos: NormPos | null = null
 ): ChatOverlayGeometry {
   const out = OUTPUT_SIZE[format]
   const marginX = Math.round(out.width * 0.045)
@@ -131,7 +136,7 @@ export function chatOverlayGeometry(
   const slotHeight = lineHeight * opts.maxWrapLines
   const maxBoxHeight = Math.round(out.height * (format === 'vertical' ? 0.34 : 0.4))
   let bottom = top + Math.min(maxBoxHeight, slotHeight * opts.maxLines)
-  if (captionY !== null) {
+  if (captionY !== null && !pos) {
     const capTop = out.height * Math.max(0, captionY - 0.14)
     bottom = Math.min(bottom, Math.max(top + slotHeight, capTop - marginY))
   }
@@ -139,11 +144,62 @@ export function chatOverlayGeometry(
   const maxLines = Math.max(1, Math.min(opts.maxLines, Math.floor(height / slotHeight)))
 
   const width = Math.round(out.width * (format === 'vertical' ? 0.5 : 0.32))
-  const x = out.width - width - marginX
+  let x = out.width - width - marginX
+  let y = top
+  if (pos) {
+    const at = clampBoxPos(pos, { w: width / out.width, h: height / out.height })
+    x = Math.round(at.x * out.width)
+    y = Math.round(at.y * out.height)
+  }
   const charWidth = opts.fontSize * 0.52
   const maxCharsPerLine = Math.max(10, Math.floor((width - marginX) / charWidth))
 
-  return { x, y: top, w: width, h: height, align: 'right', lineHeight, slotHeight, maxLines, maxCharsPerLine }
+  return { x, y, w: width, h: height, align: 'right', lineHeight, slotHeight, maxLines, maxCharsPerLine }
+}
+
+/** The chat box's top-left corner and size as fractions of the output frame. */
+export function chatBoxNorm(g: Pick<ChatOverlayGeometry, 'x' | 'y' | 'w' | 'h'>, format: RenderFormat): { x: number; y: number; w: number; h: number } {
+  const out = OUTPUT_SIZE[format]
+  return { x: g.x / out.width, y: g.y / out.height, w: g.w / out.width, h: g.h / out.height }
+}
+
+/** His saved chat position for a format, or null for the default place. */
+export function chatPosition(saved: FormatPositions | undefined, format: RenderFormat): NormPos | null {
+  return saved?.[format] ?? null
+}
+
+/** The saved positions after the chat box was placed at `pos` for `format`. */
+export function withChatPosition(saved: FormatPositions | undefined, format: RenderFormat, pos: NormPos): FormatPositions {
+  return { ...saved, [format]: { x: roundNorm(pos.x), y: roundNorm(pos.y) } }
+}
+
+/** The saved positions with one format back on the default place (empty when none is left). */
+export function resetChatPosition(saved: FormatPositions | undefined, format: RenderFormat): FormatPositions {
+  const next = { ...saved }
+  delete next[format]
+  return next
+}
+
+/**
+ * Moves the chat box to `pos` (its top-left corner, already where the pointer
+ * is): keeps the whole box in the frame and, unless `snap` is off, snaps its
+ * edges to the platform safe area and its centre to the middle of the frame,
+ * and the box to its default place. `guideX`/`guideY` are the frame lines
+ * that lined up, for drawing.
+ */
+export function placeChatBox(
+  pos: NormPos,
+  box: { w: number; h: number },
+  format: RenderFormat,
+  home: NormPos,
+  opts: { snap?: boolean } = {}
+): { pos: NormPos; guideX: number | null; guideY: number | null } {
+  const clamped = clampBoxPos(pos, box)
+  if (opts.snap === false) return { pos: clamped, guideX: null, guideY: null }
+  const area = safeArea(format)
+  const sx = snapAxisHome(clamped.x, { at: home.x, guide: home.x }, boxSnapTargets(box.w, [area.left, area.right]))
+  const sy = snapAxisHome(clamped.y, { at: home.y, guide: home.y }, boxSnapTargets(box.h, [area.top, area.bottom]))
+  return { pos: clampBoxPos({ x: sx.value, y: sy.value }, box), guideX: sx.guide, guideY: sy.guide }
 }
 
 export interface ChatOverlayLine {

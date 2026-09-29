@@ -14,6 +14,11 @@ export function applyClipPatch(clip: Clip, patch: ClipPatch, layoutExists: (id: 
   if (patch.status !== undefined) next.status = patch.status
   if (patch.captions !== undefined) next.captions = { ...patch.captions }
   if (patch.chatOverlay !== undefined) next.chatOverlay = patch.chatOverlay
+  if (patch.chatPos !== undefined) {
+    // An empty object puts the chat box back on its default place.
+    if (Object.keys(patch.chatPos).length === 0) delete next.chatPos
+    else next.chatPos = { ...patch.chatPos }
+  }
   if (patch.audio !== undefined) next.audio = patch.audio
   if (patch.formats !== undefined) next.formats = { ...patch.formats }
   if (patch.layoutId !== undefined) next.layoutId = patch.layoutId === null || layoutExists(patch.layoutId) ? patch.layoutId : clip.layoutId

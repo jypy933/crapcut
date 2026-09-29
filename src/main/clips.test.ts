@@ -70,6 +70,33 @@ describe('applyClipPatch', () => {
     expect(trimmed.structureDecision).not.toBe(clip.structureDecision)
   })
 
+  it('saves where the captions and the chat box were dragged', () => {
+    const moved = apply({
+      captions: { enabled: true, y: 0.5, yHorizontal: 0.85, uppercase: true, styleId: 'clean' },
+      chatPos: { vertical: { x: 0.1, y: 0.4 } }
+    })
+    expect(moved.captions.yHorizontal).toBe(0.85)
+    expect(moved.chatPos).toEqual({ vertical: { x: 0.1, y: 0.4 } })
+  })
+
+  it('puts the chat box back on its default place for an empty position', () => {
+    const placed = applyClipPatch({ ...clip, chatPos: { vertical: { x: 0.1, y: 0.4 } } }, ClipPatchSchema.parse({ chatPos: {} }), () => true, 5000)
+    expect('chatPos' in placed).toBe(false)
+  })
+
+  it('leaves a clip saved without positions on the defaults', () => {
+    expect(clip.chatPos).toBeUndefined()
+    expect(apply({ title: 'x' }).chatPos).toBeUndefined()
+    expect(apply({ title: 'x' }).captions.yHorizontal).toBeUndefined()
+  })
+
+  it('rejects positions outside the frame or with extra fields', () => {
+    expect(() => ClipPatchSchema.parse({ chatPos: { vertical: { x: 1.5, y: 0.2 } } })).toThrow()
+    expect(() => ClipPatchSchema.parse({ chatPos: { vertical: { x: 0.5, y: 0.2, z: 1 } } })).toThrow()
+    expect(() => ClipPatchSchema.parse({ chatPos: { sideways: { x: 0.5, y: 0.2 } } })).toThrow()
+    expect(() => ClipPatchSchema.parse({ captions: { enabled: true, y: 0.5, yHorizontal: -1, uppercase: true, styleId: 'clean' } })).toThrow()
+  })
+
   it('rejects fields the UI may not set', () => {
     expect(() => ClipPatchSchema.parse({ musicPath: 'C:\\evil.exe' })).toThrow()
     expect(() => ClipPatchSchema.parse({ source: { start: 0, end: 1 } })).toThrow()

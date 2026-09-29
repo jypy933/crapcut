@@ -1,6 +1,7 @@
 // Types shared by the main process and the renderer. Plain data only.
 
 import type { CaptionStyleId } from './captionStyles'
+import type { FormatPositions } from './overlayPosition'
 import type { StructureDecision } from './structure'
 
 /** One transcribed word, times in seconds from the start of the VOD. */
@@ -116,8 +117,10 @@ export const AUDIO_MODE_LABELS: Record<AudioMode, string> = {
 
 export interface CaptionSettings {
   enabled: boolean
-  /** Vertical centre of the caption block, 0 (top) .. 1 (bottom). */
+  /** Vertical centre of the caption block in 9:16, 0 (top) .. 1 (bottom). */
   y: number
+  /** The same for 16:9 when he moved it there; missing means the default (see shared/captionPlacement.ts). */
+  yHorizontal?: number
   uppercase: boolean
   styleId: CaptionStyleId
 }
@@ -156,6 +159,8 @@ export interface Clip {
   chatMessages: ChatMessage[]
   /** Shows the chat overlay for this clip. Off by default. */
   chatOverlay: boolean
+  /** Where he dragged the chat box (its top-left corner in the output frame), per format; missing means the default. */
+  chatPos?: FormatPositions
   audio: AudioMode
   /** Absolute path of the music file for 'voice_music'. */
   musicPath: string | null

@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AutoEditPreviewState, ExportFormat, Layout } from '@shared/types'
+import { captionY } from '@shared/captionPlacement'
 import { captionStyle } from '@shared/captionStyles'
 import { buildAss, defaultAssStyle } from '../core/ass'
 import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
@@ -125,7 +126,7 @@ export class AutoEditPreviewService {
       if (clip.captions.enabled) {
         const relativeWords = wordsIn(clip.words, start, end).map((w) => ({ t0: Math.max(0, w.t0 - start), t1: Math.min(end, w.t1) - start, text: w.text }))
         const remapped = remapWordsToEdl(relativeWords, edl)
-        const y = format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1))
+        const y = captionY(clip.captions, format)
         writeFileSync(join(dir, `${clipId}-captions.ass`), buildAss(remapped, defaultAssStyle(format, y, clip.captions.uppercase, captionStyle(clip.captions.styleId))))
         captionsAssFile = `${clipId}-captions.ass`
       }

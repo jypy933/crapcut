@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { captionAt, clipWords, groupWords } from '@shared/captions'
+import { CAPTION_Y_MAX, CAPTION_Y_MIN, captionY } from '@shared/captionPlacement'
 import { CAPTION_STYLES, captionStyle } from '@shared/captionStyles'
-import { buildChatOverlay, chatOverlayGeometry, type ChatOverlayLine } from '@shared/chatOverlay'
+import { buildChatOverlay, chatOverlayGeometry, DEFAULT_CHAT_OVERLAY_OPTIONS, type ChatOverlayLine } from '@shared/chatOverlay'
 import type { ChatMessage, Layout, Word } from '@shared/types'
 import { assColor, assEscape, assTime, buildAss, defaultAssStyle, inlineColor, type ChatOverlayAssInput } from './ass'
 
@@ -109,6 +110,35 @@ describe('buildAss', () => {
   })
   it('handles no words', () => {
     expect(buildAss([], defaultAssStyle('horizontal', 0.8, false))).toContain('[Events]')
+  })
+})
+
+describe('caption placement in the ASS file', () => {
+  const posOf = (format: 'vertical' | 'horizontal', captions: { y: number; yHorizontal?: number }): string => {
+    const ass = buildAss([w(0, 1, 'hi')], defaultAssStyle(format, captionY(captions, format), true))
+    return /\\pos\((\d+),(\d+)\)/.exec(ass)![0]
+  }
+
+  it('places the caption at the shared mapping for both formats', () => {
+    expect(posOf('vertical', { y: 0.72 })).toBe('\\pos(540,1382)')
+    expect(posOf('vertical', { y: 0.4 })).toBe('\\pos(540,768)')
+    expect(posOf('horizontal', { y: 0.72 })).toBe('\\pos(960,886)')
+    expect(posOf('horizontal', { y: 0.72, yHorizontal: 0.3 })).toBe('\\pos(960,324)')
+  })
+
+  it('keeps the caption inside the draggable range', () => {
+    expect(posOf('vertical', { y: 0 })).toBe(`\\pos(540,${Math.round(CAPTION_Y_MIN * 1920)})`)
+    expect(posOf('horizontal', { y: 0.5, yHorizontal: 1 })).toBe(`\\pos(960,${Math.round(CAPTION_Y_MAX * 1080)})`)
+  })
+
+  it('places a moved chat box where the overlay layout says', () => {
+    const layout: Layout = { id: 'l', name: 'Full frame', kind: 'blur_fill', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } }
+    const geometry = chatOverlayGeometry('vertical', layout, { width: 1920, height: 1080 }, 0.72, DEFAULT_CHAT_OVERLAY_OPTIONS, { x: 0.1, y: 0.4 })
+    const lines = buildChatOverlay([{ t: 10, user: 'zap', text: 'hello' }], 10, 20, geometry)
+    const ass = buildAss([], defaultAssStyle('vertical', 0.72, true), { lines, font: { fontName: 'Segoe UI', fontSize: 34 } })
+    expect(geometry.x).toBe(108)
+    expect(geometry.y).toBe(768)
+    expect(ass).toContain(`\\pos(${Math.round(geometry.x + geometry.w)},${Math.round(geometry.y + geometry.h - geometry.slotHeight)})`)
   })
 })
 

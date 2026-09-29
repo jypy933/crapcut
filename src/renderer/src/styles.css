@@ -717,6 +717,7 @@ kbd {
   -webkit-text-stroke-color: black;
   line-height: 1.15;
   cursor: ns-resize;
+  touch-action: none;
   text-shadow: 0 0.06em 0.12em rgba(0, 0, 0, 0.55);
   word-break: break-word;
 }
@@ -743,17 +744,40 @@ kbd {
     transform: scale(1);
   }
 }
-.frame .cap-guide {
+.frame .safe-zone {
   position: absolute;
+  background: rgba(240, 106, 106, 0.2);
+  border: 1px dashed rgba(240, 106, 106, 0.55);
+  pointer-events: none;
+}
+.frame .snap-guide {
+  position: absolute;
+  pointer-events: none;
+  background: var(--accent-2);
+  opacity: 0.85;
+}
+.frame .snap-guide.h {
   left: 0;
   right: 0;
-  border-top: 1px dashed rgba(255, 255, 255, 0.35);
-  pointer-events: none;
+  height: 1px;
+}
+.frame .snap-guide.v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
 }
 .chat-box {
   position: absolute;
-  pointer-events: none;
   overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.chat-box:hover,
+.chat-box.dragging {
+  outline: 1px dashed rgba(255, 255, 255, 0.35);
+}
+.chat-box.dragging {
+  cursor: grabbing;
 }
 .chat-line {
   position: absolute;

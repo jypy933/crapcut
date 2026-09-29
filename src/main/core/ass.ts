@@ -2,9 +2,11 @@
 // FFmpeg's `ass` filter (libass).
 
 import { assColor, assEscape, inlineColor } from '@shared/assText'
+import { clampCaptionY } from '@shared/captionPlacement'
 import { displayText, groupWords, isKeywordWord } from '@shared/captions'
 import { CAPTION_STYLES, type CaptionStyle } from '@shared/captionStyles'
 import type { ChatOverlayLine } from '@shared/chatOverlay'
+import { toOutputPixels } from '@shared/overlayPosition'
 import type { Word } from '@shared/types'
 
 export { assColor, assEscape, inlineColor }
@@ -16,7 +18,7 @@ export interface AssStyle {
   fontSize: number
   outline: number
   shadow: number
-  /** Vertical centre of the caption, 0..1 of the frame height. */
+  /** Vertical centre of the caption, 0..1 of the frame height (see `captionY` in shared/captionPlacement.ts). */
   y: number
   uppercase: boolean
   /** #RRGGBB */
@@ -103,8 +105,8 @@ export function buildAss(words: Word[], style: AssStyle, chat?: ChatOverlayAssIn
   const back = assColor('#000000', style.box ? 0x30 : 0x80)
   const highlight = inlineColor(style.highlightColor)
   const normal = inlineColor(style.textColor)
-  const x = Math.round(style.width / 2)
-  const y = Math.round(Math.max(0.05, Math.min(0.95, style.y)) * style.height)
+  // The caption block is centred on this point; the preview places it with the same mapping.
+  const { x, y } = toOutputPixels({ x: 0.5, y: clampCaptionY(style.y) }, { width: style.width, height: style.height })
   const margin = Math.round(style.width * 0.06)
   const borderStyle = style.box ? 3 : 1
 

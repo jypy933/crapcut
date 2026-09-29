@@ -254,6 +254,17 @@ clips.push({
   structureDecision: null,
   autoEdit: true
 })
+// Dev only: keeps his caption/chat placement across page reloads, so dragging
+// can be checked per clip after a reload.
+const PLACEMENT_KEY = 'crapcut-dev-placement'
+function loadPlacement(): Record<string, Pick<Clip, 'captions' | 'chatPos' | 'chatOverlay'>> {
+  try {
+    return JSON.parse(localStorage.getItem(PLACEMENT_KEY) ?? '{}')
+  } catch {
+    return {}
+  }
+}
+clips = clips.map((c) => ({ ...c, ...loadPlacement()[c.id] }))
 let layouts: Layout[] = []
 let defaultLayoutId: string | null = null
 let exports: ExportItem[] = []
@@ -328,8 +339,24 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
   'jobs:create': () => ({ ok: false, reason: 'This is the UI preview; no real jobs run here.' }),
   'clips:list': (jobId: string) => clips.filter((c) => c.jobId === jobId),
   'clips:update': (id: string, patch: Partial<Clip>) => {
-    clips = clips.map((c) => (c.id === id ? { ...c, ...patch } : c))
-    return clips.find((c) => c.id === id)
+    clips = clips.map((c) => {
+      if (c.id !== id) return c
+      const next = { ...c, ...patch }
+      // Like the real store: an empty chat position is "back to the default".
+      if (patch.chatPos && Object.keys(patch.chatPos).length === 0) delete next.chatPos
+      return next
+    })
+    const saved = clips.find((c) => c.id === id)
+    if (saved) {
+      try {
+        const all = loadPlacement()
+        all[id] = { captions: saved.captions, chatPos: saved.chatPos, chatOverlay: saved.chatOverlay }
+        localStorage.setItem(PLACEMENT_KEY, JSON.stringify(all))
+      } catch {
+        // Storage can be blocked; the mock just forgets on reload then.
+      }
+    }
+    return saved
   },
   'clips:reset': (id: string) => clips.find((c) => c.id === id),
   'clips:pickMusic': () => null,

@@ -5,8 +5,9 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { clipWords } from '@shared/captions'
+import { captionY } from '@shared/captionPlacement'
 import { captionStyle } from '@shared/captionStyles'
-import { buildChatOverlay, chatOverlayGeometry, DEFAULT_CHAT_OVERLAY_OPTIONS } from '@shared/chatOverlay'
+import { buildChatOverlay, chatOverlayGeometry, chatPosition, DEFAULT_CHAT_OVERLAY_OPTIONS } from '@shared/chatOverlay'
 import type { Clip, ExportFormat, HardwareProfile, Layout } from '@shared/types'
 import { buildAss, defaultAssStyle, type ChatOverlayAssInput } from '../core/ass'
 import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
@@ -102,11 +103,12 @@ function writeCaptionsAss(clip: Clip, format: ExportFormat, workDir: string, lay
   const chatOn = clip.chatOverlay && clip.chatMessages.length > 0
   if (!captionsOn && !chatOn) return null
   const words = captionsOn ? clipWords(clip.words, cut.start, cut.end) : []
-  const y = format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1))
+  const y = captionY(clip.captions, format)
   const style = captionStyle(clip.captions.styleId)
   let chat: ChatOverlayAssInput | undefined
   if (chatOn) {
-    const geometry = chatOverlayGeometry(format, layout, { width: cut.media.width, height: cut.media.height }, captionsOn ? y : null)
+    const source = { width: cut.media.width, height: cut.media.height }
+    const geometry = chatOverlayGeometry(format, layout, source, captionsOn ? y : null, DEFAULT_CHAT_OVERLAY_OPTIONS, chatPosition(clip.chatPos, format))
     const lines = buildChatOverlay(clip.chatMessages, cut.start, cut.end, geometry)
     if (lines.length > 0) chat = { lines, font: { fontName: 'Segoe UI', fontSize: DEFAULT_CHAT_OVERLAY_OPTIONS.fontSize } }
   }
@@ -310,7 +312,7 @@ async function renderAutoEditToFile(
     // segments, then remapped onto the edited output timeline.
     const relativeWords = wordsIn(clip.words, start, end).map((w) => ({ t0: Math.max(0, w.t0 - start), t1: Math.min(end, w.t1) - start, text: w.text }))
     const remapped = remapWordsToEdl(relativeWords, edl)
-    const y = format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1))
+    const y = captionY(clip.captions, format)
     const style = captionStyle(clip.captions.styleId)
     writeFileSync(join(workDir, 'captions.ass'), buildAss(remapped, defaultAssStyle(format, y, clip.captions.uppercase, style)))
     captionsAssFile = 'captions.ass'

@@ -17,6 +17,10 @@ const optionalModelId = z.enum(['llm', 'voiceSeparation'])
 
 export const RectSchema = z.object({ x: unit, y: unit, w: unit.min(0.01), h: unit.min(0.01) }).strict()
 
+export const NormPosSchema = z.object({ x: unit, y: unit }).strict()
+
+export const FormatPositionsSchema = z.object({ vertical: NormPosSchema.optional(), horizontal: NormPosSchema.optional() }).strict()
+
 export const LayoutSchema = z
   .object({
     id,
@@ -37,8 +41,9 @@ export const ClipPatchSchema = z
     end: seconds,
     status: z.enum(['pending', 'accepted', 'rejected']),
     words: z.array(WordSchema).max(5000),
-    captions: z.object({ enabled: z.boolean(), y: unit, uppercase: z.boolean(), styleId: z.enum(CAPTION_STYLE_IDS) }).strict(),
+    captions: z.object({ enabled: z.boolean(), y: unit, yHorizontal: unit.optional(), uppercase: z.boolean(), styleId: z.enum(CAPTION_STYLE_IDS) }).strict(),
     chatOverlay: z.boolean(),
+    chatPos: FormatPositionsSchema,
     audio: z.enum(AUDIO_MODES),
     layoutId: id.nullable(),
     formats: z.object({ vertical: z.boolean(), horizontal: z.boolean() }).strict(),

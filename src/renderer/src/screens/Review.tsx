@@ -267,7 +267,8 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
                   videoRef={video}
                   onTime={setTime}
                   onPlaying={setPlaying}
-                  onCaptionY={(y) => void update(clip.id, { captions: { ...clip.captions, y } })}
+                  onCaptions={(captions) => void update(clip.id, { captions })}
+                  onChatPos={(chatPos) => void update(clip.id, { chatPos })}
                 />
               ) : (
                 <AutoEditPreviewPane jobId={jobId} clip={clip} state={previews[clip.id] ?? OFF_PREVIEW} />
@@ -485,7 +486,7 @@ function Inspector({
               UPPERCASE
             </label>
             <CaptionLines clip={clip} words={words} groups={groups} time={time} onSeek={onSeek} onWords={(newWords) => onUpdate({ words: newWords })} />
-            <div className="small faint">Drag the captions on the video to move them.</div>
+            <div className="small faint">Drag the captions (and the chat) on the video to move them.</div>
           </>
         )}
       </Field>
