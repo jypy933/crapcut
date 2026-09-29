@@ -51,7 +51,7 @@ describe.skipIf(!built)('app smoke test', () => {
       process: typeof (window as unknown as { process?: unknown }).process,
       api: Object.keys((window as unknown as { crapcut: object }).crapcut).sort()
     }))
-    expect(env).toEqual({ require: 'undefined', process: 'undefined', api: ['clipUrl', 'invoke', 'on'] })
+    expect(env).toEqual({ require: 'undefined', process: 'undefined', api: ['clipUrl', 'invoke', 'on', 'previewUrl'] })
 
     // Unknown channels and bad arguments are refused.
     const refused = await page.evaluate(async () => {
