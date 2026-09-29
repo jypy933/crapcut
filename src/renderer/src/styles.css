@@ -409,6 +409,10 @@ textarea.input {
 .toggle.on {
   background: var(--accent);
 }
+.toggle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
 .toggle.on::after {
   transform: translateX(12px);
   background: white;
@@ -690,6 +694,30 @@ kbd {
   right: 0;
   border-top: 1px dashed rgba(255, 255, 255, 0.35);
   pointer-events: none;
+}
+.chat-box {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+}
+.chat-line {
+  position: absolute;
+  left: 0;
+  color: #fff;
+  font-weight: 500;
+  line-height: 1.3;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 0.15em 0.5em;
+  border-radius: 4px;
+  width: fit-content;
+  max-width: 100%;
+}
+.chat-line.right {
+  left: auto;
+  right: 0;
+}
+.chat-user {
+  font-weight: 700;
 }
 .frame .loading {
   position: absolute;

@@ -414,6 +414,20 @@ function Inspector({
         )}
       </Field>
 
+      <Field
+        label="Chat"
+        right={
+          <Toggle
+            on={clip.chatOverlay}
+            label="Chat"
+            disabled={clip.chatMessages.length === 0}
+            onChange={(chatOverlay) => onUpdate({ chatOverlay })}
+          />
+        }
+      >
+        {clip.chatMessages.length === 0 && <div className="small faint">No chat in this clip's time range.</div>}
+      </Field>
+
       <Field label="Audio">
         <div className="col" style={{ gap: 4 }}>
           {(Object.keys(AUDIO_MODE_LABELS) as AudioMode[]).map((m) => {

@@ -13,8 +13,18 @@ export function Spinner({ size = 14 }: { size?: number }): ReactNode {
   return <Loader2 size={size} className="spin" />
 }
 
-export function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }): ReactNode {
-  return <button type="button" role="switch" aria-checked={on} aria-label={label} className={`toggle${on ? ' on' : ''}`} onClick={() => onChange(!on)} />
+export function Toggle({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }): ReactNode {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={disabled}
+      className={`toggle${on ? ' on' : ''}`}
+      onClick={() => onChange(!on)}
+    />
+  )
 }
 
 export interface SegmentOption<T extends string> {

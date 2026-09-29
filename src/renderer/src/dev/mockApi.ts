@@ -3,7 +3,7 @@
 
 import { parseChannelName } from '@shared/channelName'
 import type { CrapcutApi, EventChannel, Events, InvokeChannel } from '@shared/ipc'
-import type { AppInfo, AutostartStatus, BestOfItem, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
+import type { AppInfo, AutostartStatus, BestOfItem, ChannelWatchStatus, ChatMessage, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
 
 const listeners = new Map<string, Set<(p: unknown) => void>>()
 function emit<E extends EventChannel>(e: E, p: Events[E]): void {
@@ -87,6 +87,22 @@ function words(start: number, text: string): Word[] {
   return text.split(' ').map((t, i) => ({ t0: start + i * 0.38, t1: start + i * 0.38 + 0.32, text: t }))
 }
 
+const CHAT_USERS = ['zap', 'kayleigh_', 'PixelPunk', 'streamfan99', 'glorbo', '해달서준', 'xX_Wolf_Xx', 'noodle_soup']
+const CHAT_LINES = ['KEKW', 'no way', 'LOL', 'lets goooooo', 'clip it', 'that is insane', 'bro what', 'PogChamp', 'hahahaha', 'W clip', 'chat is this real']
+
+/** A believable burst of reactions across a clip's time range, for the dev UI only. */
+function fakeChat(start: number, end: number): ChatMessage[] {
+  const out: ChatMessage[] = []
+  let t = start
+  let i = 0
+  while (t < end) {
+    out.push({ t: Math.floor(t), user: CHAT_USERS[i % CHAT_USERS.length]!, text: CHAT_LINES[(i * 3) % CHAT_LINES.length]! })
+    t += 0.5 + (i % 3) * 0.35
+    i++
+  }
+  return out
+}
+
 const titles = ['He did NOT see that coming', 'Chat lost it at this', 'The cleanest clutch ever', 'Wait for the ending...', 'Worst luck of the stream', "This is why we don't trust him"]
 let clips: Clip[] = titles.map((title, i) => {
   const start = 1000 + i * 1500
@@ -103,6 +119,8 @@ let clips: Clip[] = titles.map((title, i) => {
     status: i === 0 ? 'accepted' : i === 3 ? 'rejected' : 'pending',
     words: words(start + 1, 'okay okay watch this one guys no way he actually did that I cannot believe what just happened chat is going crazy right now this is insane'),
     captions: { enabled: true, y: 0.72, uppercase: true, styleId: 'clean' },
+    chatMessages: fakeChat(start - 20, start + 48 + i * 3),
+    chatOverlay: i === 0,
     audio: 'original',
     musicPath: null,
     layoutId: null,
