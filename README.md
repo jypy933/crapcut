@@ -14,15 +14,21 @@ cut and the captions, and export.
 - **Built for long streams.** Only the audio and chat are downloaded to find
   moments; video is downloaded just for the clips you keep. Every step resumes
   if the app or PC is closed.
-- **Your layout.** Mark where your facecam is once; vertical clips put the cam
-  above the game automatically.
-
+- **Captions that follow the voice.** Each word lights up as it is spoken and
+  disappears in pauses. Drag the captions or the chat box out of the way on any
+  clip, and the export matches the preview exactly.
+- **Your layouts.** Save as many camera layouts as you like: drag and resize the
+  facecam and game boxes on a real frame, pick a default, and choose a layout
+  per clip.
+- **Always know where it is.** Every VOD shows its current step, progress and
+  time left, and exports show progress on every screen and on the Windows
+  taskbar.
 - **Your audio.** Per clip: original audio, voice only, voice with quieter
   game, or voice with your own music (the voice is separated on your PC, only
   for the clips you export).
 
-> Status: first test builds. Tested end to end on AMD; the first NVIDIA run is
-> still to come.
+> Status: early test builds (0.6). Tested end to end on AMD; the first NVIDIA
+> run is still to come.
 
 ## Requirements
 
