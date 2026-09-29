@@ -105,6 +105,44 @@ download, its audio is matched against the full stream audio
 (`core/align.ts`, normalised cross-correlation of 10 ms loudness envelopes), so
 captions and cuts stay frame-accurate.
 
+### Automatic viral edit
+
+Every accepted clip gets one automatic re-edit -- the app picks the structure,
+never the user -- with a per-clip "Auto edit" toggle to fall back to the plain
+cut. `core/structureSignals.ts` measures the clip's shape (where the reaction
+sits, a quotable line, chat vs. audio), `core/structurePick.ts` scores every
+structure against those signals and picks one, and `core/viralEdit.ts` turns
+the decision into an EDL (`core/edl.ts`): trimmed silences, a punch-in zoom,
+sound effects, and sometimes a cold open, a quote card or a loop ending.
+`core/edlFilter.ts` turns the EDL into an FFmpeg filter graph and
+`core/edlCaptions.ts` remaps the clip's own words onto it.
+
+The decision is computed once moments are found (`pipeline/steps.ts`), with
+the language model narrowing a close call (`core/structureLlm.ts`) if one is
+running -- the same `llama-server` session the moments step already started,
+never a second one. Without the model, or for a clip saved before this
+existed, `core/clipFacts.ts`'s heuristic-only pick fills it in lazily. A trim
+in review recomputes it the same cheap way, carrying a previous quote span or
+chat picks forward only while they still fit the new cut.
+
+At export, `pipeline/clipRender.ts` builds the EDL and renders it with
+`buildEdlRenderArgs` in place of the plain path's `buildRenderArgs`, keeping
+the same layout, audio option and encoder fallback; `pipeline/sfxCache.ts`
+renders the small set of sound effects once into `tools/sfx` and reuses them
+after that. The chat overlay is not remapped through the EDL yet, so it is
+simply left off an auto-edited clip rather than shown at the wrong moment.
+"Best of" always uses the plain clips, never the automatic edit -- a per-clip
+loop ending or punch-in is built for a clip watched on its own and would fight
+the best-of's own crossfade join.
+
+Review shows a second, small tab next to the editor: a cached low-res preview
+of the clip's current auto edit, rendered in the background by
+`pipeline/autoEditPreview.ts`, debounced after an edit and cancelled when a
+newer request supersedes it. The result is cached under the job's own work
+folder (`previews/`), keyed by a hash of the EDL, captions and source, and
+served to the tab through the same `crapcut-media://` protocol the editor's
+video uses.
+
 ### Best of the stream
 
 From Review, "Best of" joins the job's kept clips, in stream order, into one
