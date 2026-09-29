@@ -26,8 +26,9 @@ import {
   excerptRange,
   parseAnswer,
   ratingFactor,
+  refineSystemPrompt,
+  scanSystemPrompt,
   scanWindows,
-  SYSTEM_PROMPT,
   topChat,
   type Excerpt,
   type Refined
@@ -539,10 +540,10 @@ async function openLlm(ctx: StepContext): Promise<LlmSession | null> {
   }
 }
 
-async function ask(ctx: StepContext, llm: LlmSession, prompt: string, sample: 0 | 1 = 0): Promise<string> {
+async function ask(ctx: StepContext, llm: LlmSession, system: string, prompt: string, sample: 0 | 1 = 0): Promise<string> {
   return llm.server.complete(
     [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: system },
       { role: 'user', content: prompt }
     ],
     ANSWER_SCHEMA,
@@ -561,14 +562,15 @@ async function ask(ctx: StepContext, llm: LlmSession, prompt: string, sample: 0 
 async function askAndParse(
   ctx: StepContext,
   llm: LlmSession,
+  system: string,
   prompt: string,
   excerpt: Excerpt,
   duration: number,
   rejectIsFinal = false
 ): Promise<Refined | null> {
-  const first = parseAnswer(await ask(ctx, llm, prompt, 0), excerpt, duration)
+  const first = parseAnswer(await ask(ctx, llm, system, prompt, 0), excerpt, duration)
   if (!llm.twoSample || !first || (rejectIsFinal && !first.keep)) return first
-  const second = parseAnswer(await ask(ctx, llm, prompt, 1), excerpt, duration)
+  const second = parseAnswer(await ask(ctx, llm, system, prompt, 1), excerpt, duration)
   return combineSamples(first, second)
 }
 
@@ -582,6 +584,7 @@ async function refineCandidates(
   duration: number
 ): Promise<(Refined | null)[]> {
   const out: (Refined | null)[] = candidates.map(() => null)
+  const system = refineSystemPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter: null })
   let failures = 0
   for (let i = 0; i < candidates.length; i++) {
     throwIfAborted(ctx.signal)
@@ -592,7 +595,7 @@ async function refineCandidates(
     const chapter = meta.chapters.find((ch) => c.event >= ch.start && c.event < ch.end)?.title ?? null
     const prompt = buildPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, c, excerpt, topChat(messages, { start: c.peak - 12, end: c.peak + 5 }))
     try {
-      out[i] = await askAndParse(ctx, llm, prompt, excerpt, duration)
+      out[i] = await askAndParse(ctx, llm, system, prompt, excerpt, duration)
       if (!out[i]) ctx.log.warn('unusable model answer')
     } catch (err) {
       if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
@@ -625,6 +628,7 @@ async function scanTranscript(
   ctx.log.info(`scanning ${windows.length} transcript windows`)
   const transcriptSignal = TRANSCRIPT_SIGNAL * adjustments.transcriptWeight
   const out: Pick[] = []
+  const system = scanSystemPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter: null })
   let failures = 0
   for (let i = 0; i < windows.length; i++) {
     throwIfAborted(ctx.signal)
@@ -638,7 +642,7 @@ async function scanTranscript(
     const chapter = meta.chapters.find((ch) => range.start >= ch.start && range.start < ch.end)?.title ?? null
     try {
       const prompt = buildScanPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, excerpt)
-      const r = await askAndParse(ctx, llm, prompt, excerpt, duration, true)
+      const r = await askAndParse(ctx, llm, system, prompt, excerpt, duration, true)
       if (!r || !r.keep || r.rating < TRANSCRIPT_MIN_RATING) continue
       const score = combinedScore(transcriptSignal, r.rating)
       // The scan gives a fixed nominal signal, not a z-score; scoreToStrength

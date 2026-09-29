@@ -97,47 +97,77 @@ export const SYSTEM_PROMPT =
   'You are an expert short-form video editor. You pick clips from livestream VODs for TikTok, YouTube Shorts and Instagram Reels. ' +
   'You answer with JSON only.'
 
+const ANSWER_LINE = 'Answer as JSON: {"keep": boolean, "rating": integer, "start": number, "end": number, "title": string}'
+
+export const REFINE_TASK = [
+  'Task:',
+  `1. Decide if the excerpt makes a good ${CLIP_MIN_SEC}-${CLIP_MAX_SEC} second vertical clip on its own (funny, surprising, skillful, emotional or quotable).`,
+  '2. Choose start and end in excerpt seconds: start where a viewer understands what is happening (a hook in the first seconds), end right after the payoff or reaction. Do not cut a sentence in half.',
+  '3. Write a short catchy title (at most 60 characters) in the same language as the transcript. No hashtags, no quotes.',
+  '4. Rate it from 1 (boring) to 10 (must post).'
+].join('\n')
+
+export const SCAN_TASK = [
+  'Task:',
+  `1. Is there a moment in the excerpt that would make a great ${CLIP_MIN_SEC}-${CLIP_MAX_SEC} second vertical clip on its own (funny, surprising, skillful, emotional or quotable)? If not, set keep to false.`,
+  '2. If yes, choose start and end in excerpt seconds: a hook in the first seconds, end right after the payoff. Do not cut a sentence in half.',
+  '3. Write a short catchy title (at most 60 characters) in the same language as the transcript. No hashtags, no quotes.',
+  '4. Rate it from 1 (boring) to 10 (must post). Be strict: most excerpts are a 3 or 4.'
+].join('\n')
+
+/** Same for every request of a job. */
+function streamLine(ctx: PromptContext): string {
+  return `Stream: "${sanitize(ctx.title)}" by ${sanitize(ctx.channel)}.`
+}
+
+/** The game or category an excerpt falls in; it changes within a job, so it goes with the excerpt. */
+function playing(ctx: PromptContext): string {
+  return ctx.chapter ? ` (playing: ${sanitize(ctx.chapter)})` : ''
+}
+
+/**
+ * Everything that is the same for every candidate of a job (role, stream line,
+ * task, the two examples) goes in the system message, and only the excerpt in
+ * the user message. llama-server keeps a checkpoint of the model state at the
+ * start of the last user message (the model is a hybrid one that cannot rewind
+ * to an arbitrary token), so the next request only has to read the excerpt.
+ */
+export function refineSystemPrompt(ctx: PromptContext): string {
+  return [SYSTEM_PROMPT, '', streamLine(ctx), '', REFINE_TASK, '', FEW_SHOT_KEEP, '', FEW_SHOT_SKIP].join('\n')
+}
+
+/** The excerpt part of a candidate's request; pairs with `refineSystemPrompt`. */
 export function buildPrompt(ctx: PromptContext, c: Candidate, excerpt: Excerpt, chat: string[]): string {
   const len = excerpt.range.end - excerpt.range.start
   const reaction = c.chatZ > 0 ? `Chat reacted strongly around ${(c.peak - excerpt.offset).toFixed(0)} s` : `The streamer got loud around ${(c.peak - excerpt.offset).toFixed(0)} s`
   return [
-    `Stream: "${sanitize(ctx.title)}" by ${sanitize(ctx.channel)}${ctx.chapter ? ` (playing: ${sanitize(ctx.chapter)})` : ''}.`,
-    `Excerpt: ${len.toFixed(0)} seconds starting at ${formatClock(excerpt.offset)} of the stream. Times below are seconds from the start of the excerpt.`,
+    'Now the real excerpt.',
+    `Excerpt: ${len.toFixed(0)} seconds starting at ${formatClock(excerpt.offset)} of the stream${playing(ctx)}. Times below are seconds from the start of the excerpt.`,
     `${reaction}${c.reasons.length ? ` (${c.reasons.join(', ')})` : ''}.`,
     chat.length ? `Most repeated chat messages then: ${chat.join(', ')}.` : 'No chat messages.',
     '',
     'Transcript of the streamer:',
     excerpt.lines.length ? excerpt.lines.join('\n') : '(no speech)',
     '',
-    FEW_SHOT_KEEP,
-    '',
-    FEW_SHOT_SKIP,
-    '',
-    'Task:',
-    `1. Decide if this makes a good ${CLIP_MIN_SEC}-${CLIP_MAX_SEC} second vertical clip on its own (funny, surprising, skillful, emotional or quotable).`,
-    '2. Choose start and end in excerpt seconds: start where a viewer understands what is happening (a hook in the first seconds), end right after the payoff or reaction. Do not cut a sentence in half.',
-    '3. Write a short catchy title (at most 60 characters) in the same language as the transcript. No hashtags, no quotes.',
-    '4. Rate it from 1 (boring) to 10 (must post).',
-    'Answer as JSON: {"keep": boolean, "rating": integer, "start": number, "end": number, "title": string}'
+    ANSWER_LINE
   ].join('\n')
 }
 
-/** Prompt for scanning a stretch of transcript when chat gave too few moments. */
+/** System message for scanning a stretch of transcript when chat gave too few moments. */
+export function scanSystemPrompt(ctx: PromptContext): string {
+  return [SYSTEM_PROMPT, '', streamLine(ctx), '', SCAN_TASK].join('\n')
+}
+
+/** The excerpt part of a scan request; pairs with `scanSystemPrompt`. */
 export function buildScanPrompt(ctx: PromptContext, excerpt: Excerpt): string {
   const len = excerpt.range.end - excerpt.range.start
   return [
-    `Stream: "${sanitize(ctx.title)}" by ${sanitize(ctx.channel)}${ctx.chapter ? ` (playing: ${sanitize(ctx.chapter)})` : ''}.`,
-    `Excerpt: ${len.toFixed(0)} seconds starting at ${formatClock(excerpt.offset)} of the stream. Times below are seconds from the start of the excerpt.`,
+    `Excerpt: ${len.toFixed(0)} seconds starting at ${formatClock(excerpt.offset)} of the stream${playing(ctx)}. Times below are seconds from the start of the excerpt.`,
     '',
     'Transcript of the streamer:',
     excerpt.lines.join('\n'),
     '',
-    'Task:',
-    `1. Is there a moment in this excerpt that would make a great ${CLIP_MIN_SEC}-${CLIP_MAX_SEC} second vertical clip on its own (funny, surprising, skillful, emotional or quotable)? If not, set keep to false.`,
-    '2. If yes, choose start and end in excerpt seconds: a hook in the first seconds, end right after the payoff. Do not cut a sentence in half.',
-    '3. Write a short catchy title (at most 60 characters) in the same language as the transcript. No hashtags, no quotes.',
-    '4. Rate it from 1 (boring) to 10 (must post). Be strict: most excerpts are a 3 or 4.',
-    'Answer as JSON: {"keep": boolean, "rating": integer, "start": number, "end": number, "title": string}'
+    ANSWER_LINE
   ].join('\n')
 }
 

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, Word } from '@shared/types'
-import { buildStructurePrompt, chatIndexLines, parseStructureAnswer, pickStructureWithLlm, STRUCTURE_ANSWER_SCHEMA, wordIndexLines } from './structureLlm'
+import {
+  buildStructurePrompt,
+  chatIndexLines,
+  parseStructureAnswer,
+  pickStructureWithLlm,
+  STRUCTURE_ANSWER_SCHEMA,
+  STRUCTURE_SYSTEM_PROMPT,
+  wordIndexLines
+} from './structureLlm'
 import { scoreStructures, type StructureScore } from './structurePick'
 import type { StructureSignals } from './structureSignals'
 
@@ -59,15 +67,21 @@ describe('buildStructurePrompt', () => {
     { structure: 'buildAndPunch', score: 0.48, reasons: ['a single build-up leads into the payoff'] }
   ]
 
-  it('lists options, indexed words and chat, few-shots and the JSON task', () => {
+  it('lists options, indexed words and chat and asks for JSON', () => {
     const p = buildStructurePrompt(options, words, chat)
     expect(p).toContain('0: quoteCard')
     expect(p).toContain('1: buildAndPunch')
     expect(p).toContain('[0] no way he actually hit that.')
     expect(p).toContain('0: "KEKW"')
-    expect(p).toContain('Example:')
     expect(p).toContain('JSON')
     expect(p).not.toMatch(/\bseconds from\b/)
+  })
+
+  it('keeps the examples and task, the same for every clip, in the system message', () => {
+    expect(STRUCTURE_SYSTEM_PROMPT).toContain('Example:')
+    expect(STRUCTURE_SYSTEM_PROMPT).toContain('Task:')
+    expect(buildStructurePrompt(options, words, chat)).not.toContain('Example:')
+    expect(buildStructurePrompt(options, words, chat)).not.toContain('Task:')
   })
 
   it('says so when there is no chat', () => {

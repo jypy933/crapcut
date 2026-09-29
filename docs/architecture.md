@@ -83,7 +83,13 @@ either side stops the other. Clip videos download three at a time.
 6. The local LLM gets each candidate's transcript excerpt and chat summary and
    returns JSON (keep, rating, start, end, title), constrained by a JSON schema
    and validated again. Without the LLM, cut points snap to pauses in speech
-   and titles come from the transcript.
+   and titles come from the transcript. Everything that is the same for every
+   request of a job (role, stream line, task, the two worked examples) is the
+   system message and only the excerpt is the user message
+   (`core/llmPrompt.ts`): the model is a hybrid one whose state cannot be
+   rewound to an arbitrary token, but llama-server keeps a checkpoint at the
+   start of the last user message, so the next request skips the shared part
+   (about half of a refine prompt).
 7. The number of clips is not a fixed target: chat- and transcript-backed
    candidates are kept as found, and loud-only candidates need to clearly
    stand out from this stream's *other* loud moments (not just clear the

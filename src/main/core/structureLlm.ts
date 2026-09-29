@@ -14,9 +14,6 @@ import type { ChatMessage, Word } from '@shared/types'
 import { pickStructure, scoreStructures, TIE_MARGIN, type LlmChoice, type StructureDecision, type StructureId, type StructureScore } from './structurePick'
 import type { StructureSignals } from './structureSignals'
 
-/** System message for the structure tie-break request; pairs with `buildStructurePrompt`'s own instructions. */
-export const STRUCTURE_SYSTEM_PROMPT = 'You pick between short-form video edit structures for one clip. Answer with the requested JSON object only, nothing else.'
-
 /** "[<word index>] word word word", split at pauses -- indices, never seconds, so the model cannot invent a time. */
 export function wordIndexLines(words: Word[], maxWordsPerLine = 14, pause = 0.6): string[] {
   const lines: string[] = []
@@ -79,12 +76,36 @@ const FEW_SHOT_2 = [
   'Answer: {"optionIndex": 0, "quoteStart": 0, "quoteEnd": 0, "emphasisWords": [1], "chatMessages": [0, 1, 2]}'
 ].join('\n')
 
+const STRUCTURE_ANSWER_LINE = 'Answer as JSON: {"optionIndex": integer, "quoteStart": integer, "quoteEnd": integer, "emphasisWords": integer[], "chatMessages": integer[]}'
+
+/**
+ * System message for the structure tie-break request. Holds everything that is
+ * the same for every clip (instructions, task, examples) so llama-server can
+ * keep it between requests; only the clip's options, words and chat go in the
+ * user message (`buildStructurePrompt`).
+ */
+export const STRUCTURE_SYSTEM_PROMPT = [
+  'You pick between short-form video edit structures for one clip. Answer with the requested JSON object only, nothing else.',
+  '',
+  "They scored too close to call automatically, so you get the options, the clip's words and its chat.",
+  '',
+  FEW_SHOT_1,
+  '',
+  FEW_SHOT_2,
+  '',
+  'Task:',
+  '1. Pick the best-fitting option by its index.',
+  '2. If a short verbatim quote fits, give a 3-8 word index range from the transcript given; otherwise repeat the same index for start and end.',
+  '3. List up to 4 word indices worth emphasising in captions (shouted, a number, or excited).',
+  '4. List up to 4 chat message indices that best show the reaction, if chat mattered here.'
+].join('\n')
+
 /** Builds the tie-break prompt from close-scoring options and the clip's own words/chat. */
 export function buildStructurePrompt(options: StructureScore[], words: Word[], chat: ChatMessage[]): string {
   const wordLines = wordIndexLines(words)
   const chatLines = chatIndexLines(chat)
   return [
-    'You are picking between short-form video edit structures for one clip; they scored too close to call automatically.',
+    'Now the real clip.',
     'Options:',
     ...options.map((o, i) => `${i}: ${o.structure}${o.reasons.length ? ` (${o.reasons.join(', ')})` : ''}`),
     '',
@@ -94,16 +115,7 @@ export function buildStructurePrompt(options: StructureScore[], words: Word[], c
     chatLines.length ? 'Chat messages, indexed:' : 'No chat messages.',
     ...chatLines,
     '',
-    FEW_SHOT_1,
-    '',
-    FEW_SHOT_2,
-    '',
-    'Task:',
-    '1. Pick the best-fitting option by its index.',
-    '2. If a short verbatim quote fits, give a 3-8 word index range from the transcript above; otherwise repeat the same index for start and end.',
-    '3. List up to 4 word indices worth emphasising in captions (shouted, a number, or excited).',
-    '4. List up to 4 chat message indices that best show the reaction, if chat mattered here.',
-    'Answer as JSON: {"optionIndex": integer, "quoteStart": integer, "quoteEnd": integer, "emphasisWords": integer[], "chatMessages": integer[]}'
+    STRUCTURE_ANSWER_LINE
   ].join('\n')
 }
 

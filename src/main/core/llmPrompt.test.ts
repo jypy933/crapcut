@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate } from './moments'
-import { buildPrompt, buildScanPrompt, cleanTitle, scanWindows, combinedScore, combineSamples, excerptLines, excerptRange, parseAnswer, ratingFactor, topChat, type Excerpt, type Refined } from './llmPrompt'
+import {
+  buildPrompt,
+  buildScanPrompt,
+  cleanTitle,
+  scanWindows,
+  combinedScore,
+  combineSamples,
+  excerptLines,
+  excerptRange,
+  parseAnswer,
+  ratingFactor,
+  refineSystemPrompt,
+  scanSystemPrompt,
+  SYSTEM_PROMPT,
+  topChat,
+  type Excerpt,
+  type Refined
+} from './llmPrompt'
 
 const cand: Candidate = {
   peak: 1010,
@@ -41,21 +58,37 @@ describe('excerpt', () => {
 })
 
 describe('buildPrompt', () => {
-  it('includes the context, transcript and task', () => {
+  const ctx = { title: 'Big "stream"\nday', channel: 'someone', chapter: 'Elden Ring' }
+
+  it('includes the context, transcript and answer format', () => {
     const ex: Excerpt = { offset: 955, range: { start: 955, end: 1035 }, lines: ['[5.0] okay watch'] }
-    const p = buildPrompt({ title: 'Big "stream"\nday', channel: 'someone', chapter: 'Elden Ring' }, cand, ex, ['"KEKW" ×2'])
-    expect(p).toContain('Big  stream day')
+    const p = buildPrompt(ctx, cand, ex, ['"KEKW" ×2'])
     expect(p).toContain('playing: Elden Ring')
     expect(p).toContain('[5.0] okay watch')
     expect(p).toContain('"KEKW" ×2')
     expect(p).toContain('JSON')
   })
 
-  it('includes two worked examples, one kept and one skipped', () => {
+  it('keeps everything that is the same for every candidate in the system message', () => {
+    const sys = refineSystemPrompt(ctx)
+    expect(sys).toContain(SYSTEM_PROMPT)
+    expect(sys).toContain('Big  stream day')
+    expect(sys).toContain('Task:')
+    expect(sys).toContain('"keep": true')
+    expect(sys).toContain('"keep": false')
+    // The game changes within a job, so it must not break the shared beginning.
+    expect(sys).not.toContain('Elden Ring')
+    const a = refineSystemPrompt({ ...ctx, chapter: 'Poker' })
+    expect(a).toBe(sys)
+  })
+
+  it('does not repeat the shared part in the excerpt message', () => {
     const ex: Excerpt = { offset: 955, range: { start: 955, end: 1035 }, lines: [] }
-    const p = buildPrompt({ title: 't', channel: 'c', chapter: null }, cand, ex, [])
-    expect(p).toContain('"keep": true')
-    expect(p).toContain('"keep": false')
+    const p = buildPrompt(ctx, cand, ex, [])
+    expect(p).not.toContain('Big  stream day')
+    expect(p).not.toContain('Task:')
+    expect(p).not.toContain('"keep": true')
+    expect(p).toContain('(no speech)')
   })
 })
 
@@ -159,9 +192,10 @@ describe('transcript scan', () => {
     expect(scanWindows(1000, talk.slice(0, 50), [], 180, 60)).toEqual([])
   })
   it('asks for a strict rating and JSON', () => {
-    const p = buildScanPrompt({ title: 't', channel: 'c', chapter: null }, { offset: 0, range: { start: 0, end: 180 }, lines: ['[0.0] hi'] })
+    const ctx = { title: 't', channel: 'c', chapter: null }
+    const p = buildScanPrompt(ctx, { offset: 0, range: { start: 0, end: 180 }, lines: ['[0.0] hi'] })
     expect(p).toContain('[0.0] hi')
-    expect(p).toContain('Be strict')
     expect(p).toContain('JSON')
+    expect(scanSystemPrompt(ctx)).toContain('Be strict')
   })
 })
