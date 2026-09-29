@@ -39,7 +39,9 @@ const clip = (jobId: string, rank: number): Clip => ({
   layoutId: null,
   formats: { vertical: true, horizontal: false },
   reason: 'Chat spike',
-  signals: { chatZ: 3, audioZ: 0.5, score: 0.6, rating: null, source: 'chat' }
+  signals: { chatZ: 3, audioZ: 0.5, score: 0.6, rating: null, source: 'chat' },
+  structureDecision: null,
+  autoEdit: true
 })
 
 describe('Store', () => {

@@ -37,7 +37,9 @@ const clip = (jobId: string): Clip => ({
   layoutId: null,
   formats: { vertical: true, horizontal: false },
   reason: 'Chat spike',
-  signals: null
+  signals: null,
+  structureDecision: null,
+  autoEdit: true
 })
 
 let dir = ''

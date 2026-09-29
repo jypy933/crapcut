@@ -25,6 +25,8 @@ const fakeClip = (overrides: Partial<Clip> & { id: string }): Clip => ({
   formats: { vertical: true, horizontal: false },
   reason: 'Chat spike',
   signals: null,
+  structureDecision: null,
+  autoEdit: true,
   ...overrides
 })
 
