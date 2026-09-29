@@ -8,9 +8,9 @@
 // property edit never re-renders it.
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AutoEditPreviewState, ExportFormat } from '@shared/types'
+import type { AutoEditPreviewState, ExportFormat, Layout } from '@shared/types'
 import { captionStyle } from '@shared/captionStyles'
 import { buildAss, defaultAssStyle } from '../core/ass'
 import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
@@ -29,6 +29,10 @@ import { logger } from '../util/log'
 const log = logger('autoEditPreview')
 
 const DEBOUNCE_MS = 600
+/** Bump when how a preview is rendered changes, so files cached by an older render are not shown. */
+const PREVIEW_VERSION = 2
+const PREVIEW_FPS = 30
+const PREVIEW_DEFAULT_LAYOUT: Layout = { id: 'preview-default', name: 'Full frame', kind: 'blur_fill', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } }
 const PREVIEW_SIZE: Record<ExportFormat, { width: number; height: number }> = {
   vertical: { width: 360, height: 640 },
   horizontal: { width: 640, height: 360 }
@@ -97,13 +101,19 @@ export class AutoEditPreviewService {
 
       const dir = previewDir(this.paths, clip.jobId)
       mkdirSync(dir, { recursive: true })
-      const key = cacheKey(edl, clip, format)
+      const layout = clip.layoutId ? this.store.layout(clip.layoutId) : null
+      const key = cacheKey(edl, clip, layout, format)
       const file = join(dir, `${clipId}-${key}.mp4`)
       if (existsSync(file)) {
         this.set({ clipId, status: 'ready', version: key })
         return
       }
       this.set({ clipId, status: 'building', version: null })
+
+      // The caption font the export bundles (other preset fonts are already on Windows).
+      mkdirSync(join(dir, 'fonts'), { recursive: true })
+      const font = join(dir, 'fonts', 'Montserrat-Black.ttf')
+      if (!existsSync(font)) copyFileSync(join(this.paths.resources, 'fonts', 'Montserrat-Black.ttf'), font)
 
       const input = join(jobDir(this.paths, clip.jobId), 'clips', `${clip.id}.mp4`)
       const ffprobe = ffmpeg.replace(/ffmpeg\.exe$/i, 'ffprobe.exe')
@@ -130,9 +140,9 @@ export class AutoEditPreviewService {
         overlayAssFile = `${clipId}-overlay.ass`
       }
 
-      const layout = clip.layoutId ? this.store.layout(clip.layoutId) : null
-
-      const fullTmp = join(dir, `${clipId}.full.tmp.mp4`)
+      // One pass straight to preview size: the layout, zoom and captions all
+      // run on the small frame (libass scales the ASS files from their PlayRes).
+      const tmp = join(dir, `${clipId}.tmp.mp4`)
       const spec: EdlRenderSpec = {
         input,
         seek,
@@ -140,29 +150,22 @@ export class AutoEditPreviewService {
         source: { width: media.width, height: media.height },
         sourceFps: media.fps,
         format,
-        layout: layout ?? { id: 'preview-default', name: 'Full frame', kind: 'blur_fill', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } },
+        layout: layout ?? PREVIEW_DEFAULT_LAYOUT,
         edl,
         captionsAssFile,
         overlayAssFile,
-        fontsDir: null,
+        fontsDir: 'fonts',
         audio: media.hasAudio ? { kind: 'original' } : { kind: 'silent' },
         loudness: null,
         encoder: 'libx264',
         filterScript: `${clipId}-preview-graph.txt`,
-        output: `${clipId}.full.tmp.mp4`
+        output: `${clipId}.tmp.mp4`,
+        outputSize: PREVIEW_SIZE[format],
+        fps: PREVIEW_FPS
       }
       writeFileSync(join(dir, spec.filterScript), edlToFilterGraph(spec).graph)
       await runTool(ffmpeg, fastenPreview(buildEdlRenderArgs(spec)), { cwd: dir, signal, lowPriority: true })
-
-      const size = PREVIEW_SIZE[format]
-      const finalTmp = join(dir, `${clipId}.final.tmp.mp4`)
-      await runTool(
-        ffmpeg,
-        ['-hide_banner', '-nostdin', '-y', '-i', fullTmp, '-vf', `scale=${size.width}:${size.height}`, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30', '-c:a', 'aac', '-b:a', '96k', finalTmp],
-        { cwd: dir, signal }
-      )
-      rmSync(fullTmp, { force: true })
-      renameSync(finalTmp, file)
+      renameSync(tmp, file)
       pruneOldPreviews(dir, clipId, file)
 
       this.set({ clipId, status: 'ready', version: key })
@@ -174,13 +177,15 @@ export class AutoEditPreviewService {
   }
 }
 
-/** The `buildEdlRenderArgs` for a full-quality export, sped up for a throwaway preview. */
+/** The `buildEdlRenderArgs` for a libx264 export, made cheap to encode and to play for a throwaway preview. */
 function fastenPreview(args: string[]): string[] {
   const out = [...args]
   const preset = out.indexOf('-preset')
-  if (preset >= 0) out[preset + 1] = 'ultrafast'
+  if (preset >= 0) out.splice(preset, 2, '-preset', 'ultrafast', '-tune', 'fastdecode')
   const crf = out.indexOf('-crf')
   if (crf >= 0) out[crf + 1] = '30'
+  const audioRate = out.indexOf('-b:a')
+  if (audioRate >= 0) out[audioRate + 1] = '96k'
   return out
 }
 
@@ -199,10 +204,14 @@ export function findPreviewFile(paths: AppPaths, jobId: string, clipId: string):
   return match ? join(dir, match.f) : null
 }
 
-/** A stable, short key over everything that changes what the preview looks like. */
-function cacheKey(edl: unknown, clip: { words: unknown; chatOverlay: boolean; captions: unknown; source: unknown }, format: ExportFormat): string {
+/**
+ * A stable, short key over everything that changes what the preview looks
+ * like. The preview always plays the original audio and has no chat overlay,
+ * so the clip's audio option and chat toggle are left out on purpose.
+ */
+function cacheKey(edl: unknown, clip: { words: unknown; captions: unknown; source: unknown }, layout: unknown, format: ExportFormat): string {
   return createHash('sha1')
-    .update(JSON.stringify({ edl, words: clip.words, captions: clip.captions, source: clip.source, format }))
+    .update(JSON.stringify({ v: PREVIEW_VERSION, edl, words: clip.words, captions: clip.captions, source: clip.source, layout, format }))
     .digest('hex')
     .slice(0, 20)
 }

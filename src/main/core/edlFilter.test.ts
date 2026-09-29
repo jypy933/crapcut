@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Layout } from '@shared/types'
 import type { Edl, EdlSegment } from './edl'
-import { atempoChain, buildEdlRenderArgs, buildOverlayAss, edlAudioFilter, edlToFilterGraph, edlVideoFilter, shakeAmpExpr, zoomCropExpr, zoomScaleExpr, type EdlRenderSpec } from './edlFilter'
+import { atempoChain, buildEdlRenderArgs, buildOverlayAss, edlAudioFilter, edlToFilterGraph, edlVideoFilter, shakeAmpExpr, zoomExpr, zoomScaleExpr, type EdlRenderSpec } from './edlFilter'
 
 const seg = (srcStart: number, srcEnd: number, speed = 1): EdlSegment => ({ srcStart, srcEnd, speed })
 
@@ -84,13 +84,13 @@ describe('zoomScaleExpr / shakeAmpExpr', () => {
   })
 })
 
-describe('zoomCropExpr', () => {
-  it('shrinks the crop by the scale and centres it, clamped to the frame', () => {
-    const { w, h, x, y } = zoomCropExpr([{ t: 0, scale: 1, ease: 'snap' }], { width: 1000, height: 2000 })
-    expect(w).toContain('1000/')
-    expect(h).toContain('2000/')
-    expect(x).toContain('max(0,min(')
-    expect(y).toContain('max(0,min(')
+describe('zoomExpr', () => {
+  it('scales the frame up by the zoom and keeps it covering the frame', () => {
+    const { w, h, x, y } = zoomExpr([{ t: 0, scale: 1, ease: 'snap' }], { width: 1000, height: 2000 })
+    expect(w).toContain('1000*')
+    expect(h).toContain('2000*')
+    expect(x).toContain('max(W-w,min(0,')
+    expect(y).toContain('max(H-h,min(0,')
   })
 })
 
@@ -109,9 +109,11 @@ describe('edlVideoFilter', () => {
     expect(f).toContain('concat=n=2:v=1:a=0')
   })
 
-  it('adds the punch-in crop and shake when there is a zoom', () => {
+  it('adds a per-frame scale + overlay for the punch-in and shake when there is a zoom', () => {
     const f = edlVideoFilter(spec({ edl: baseEdl({ zoom: [{ t: 0, scale: 1.5, ease: 'snap', shakeAmp: 5 }] }) }))
-    expect(f).toContain('crop=w=')
+    expect(f).toContain('eval=frame')
+    expect(f).toContain('overlay=x=')
+    expect(f).not.toContain('crop=w=')
     expect(f).toContain('sin(2*PI*13*t)')
   })
 

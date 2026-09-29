@@ -2,9 +2,11 @@
 // (CrapCut's demucs.cpp build) on the chosen clip's audio at export, never on
 // the whole stream. CPU only; about 2-3x the clip length on an 8-core CPU.
 
-import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type { HardwareProfile } from '@shared/types'
+import type { LoudnessMeasurement } from '../core/render'
 import type { ToolRegistry } from '../tools/registry'
 import { runTool, ToolFailedError } from '../tools/process'
 import { UserError, isCancelled } from '../util/errors'
@@ -12,6 +14,18 @@ import { logger } from '../util/log'
 import type { GpuLock } from './gpuLock'
 
 const log = logger('stems')
+
+/**
+ * Where a clip's separated stems are kept between renders: a clip exported as
+ * both 9:16 and 16:9 (or joined into a best-of) is separated once. `dir` lives
+ * outside the per-render work folder, which is wiped every time.
+ */
+export interface StemCache {
+  dir: string
+  clipId: string
+  /** From `stemCacheKey`: changes whenever the clip's range or its source file does. */
+  key: string
+}
 
 export interface StemOptions {
   ffmpeg: string
@@ -22,6 +36,8 @@ export interface StemOptions {
   seek: number
   duration: number
   workDir: string
+  /** Reuse and store the stems here; without it they are separated on every call. */
+  cache?: StemCache
   signal: AbortSignal
   onProgress: (f: number) => void
 }
@@ -57,10 +73,69 @@ export function separatorProgress(threads: number): (line: string) => number | n
   }
 }
 
+/** Identifies one cut of one source file: the clip's range plus the file's size and modified time. */
+export function stemCacheKey(seek: number, duration: number, inputFile: string): string {
+  const st = statSync(inputFile)
+  return createHash('sha1').update(`${seek.toFixed(3)}|${duration.toFixed(3)}|${st.size}|${Math.round(st.mtimeMs)}`).digest('hex').slice(0, 16)
+}
+
+const cachedFile = (c: StemCache, name: string): string => join(c.dir, `${c.clipId}-${c.key}-${name}`)
+
+function cachedStems(c: StemCache): Stems | null {
+  const voice = cachedFile(c, 'voice.wav')
+  const background = cachedFile(c, 'background.wav')
+  return existsSync(voice) && existsSync(background) ? { voice, background } : null
+}
+
+/** Copies fresh stems into the cache (temp name, then rename) and drops this clip's older entries. */
+function storeStems(c: StemCache, stems: Stems): Stems {
+  mkdirSync(c.dir, { recursive: true })
+  const out: Stems = { voice: cachedFile(c, 'voice.wav'), background: cachedFile(c, 'background.wav') }
+  // The voice file is renamed last, so a voice file that exists always has its background.
+  for (const [from, to] of [[stems.background, out.background], [stems.voice, out.voice]] as const) {
+    copyFileSync(from, `${to}.tmp`)
+    renameSync(`${to}.tmp`, to)
+  }
+  pruneStale(c)
+  return out
+}
+
+/** Removes this clip's cache entries left by an older cut or source file. */
+function pruneStale(c: StemCache): void {
+  for (const f of readdirSync(c.dir)) {
+    if (f.startsWith(`${c.clipId}-`) && !f.startsWith(`${c.clipId}-${c.key}-`)) rmSync(join(c.dir, f), { force: true })
+  }
+}
+
+/** The clip's loudnorm measurement from the cache, or `measure()` (stored when it found one). */
+export async function cachedLoudness(cache: StemCache, measure: () => Promise<LoudnessMeasurement | null>): Promise<LoudnessMeasurement | null> {
+  const file = cachedFile(cache, 'loudness.json')
+  try {
+    const m = JSON.parse(readFileSync(file, 'utf8')) as LoudnessMeasurement
+    if (Object.values(m).every(Number.isFinite)) return m
+  } catch {
+    // not cached yet, or unreadable: measure again
+  }
+  const m = await measure()
+  if (m) {
+    mkdirSync(cache.dir, { recursive: true })
+    writeFileSync(`${file}.tmp`, JSON.stringify(m))
+    renameSync(`${file}.tmp`, file)
+    pruneStale(cache)
+  }
+  return m
+}
+
 export async function prepareStems(o: StemOptions): Promise<Stems> {
   const exe = o.tools.path('separator')
   const model = o.tools.path('model-demucs')
   if (!exe || !model) throw new UserError('Voice separation is not installed. Open setup to download it.', { retryable: false })
+
+  const hit = o.cache && cachedStems(o.cache)
+  if (hit) {
+    o.onProgress(1)
+    return hit
+  }
 
   // 1. The clip's audio as 44.1 kHz stereo WAV (what Demucs expects).
   await runTool(o.ffmpeg, ['-hide_banner', '-nostdin', '-y', '-ss', o.seek.toFixed(3), '-t', o.duration.toFixed(3), '-i', o.input, '-vn', '-ac', '2', '-ar', '44100', '-c:a', 'pcm_s16le', 'stem-in.wav'], {
@@ -106,5 +181,5 @@ export async function prepareStems(o: StemOptions): Promise<Stems> {
   const voice = join(o.workDir, 'voice.wav')
   const background = join(o.workDir, 'background.wav')
   if (!existsSync(voice) || !existsSync(background)) throw new UserError('Separating the voice failed for this clip. Try Original audio.')
-  return { voice, background }
+  return o.cache ? storeStems(o.cache, { voice, background }) : { voice, background }
 }

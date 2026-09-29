@@ -174,9 +174,16 @@ Review shows a second, small tab next to the editor: a cached low-res preview
 of the clip's current auto edit, rendered in the background by
 `pipeline/autoEditPreview.ts`, debounced after an edit and cancelled when a
 newer request supersedes it. The result is cached under the job's own work
-folder (`previews/`), keyed by a hash of the EDL, captions and source, and
-served to the tab through the same `crapcut-media://` protocol the editor's
-video uses.
+folder (`previews/`), keyed by a hash of the EDL, captions, layout and
+source, and served to the tab through the same `crapcut-media://` protocol the
+editor's video uses. It is rendered in one pass straight at preview size (the
+layout, zoom and captions all run on the small frame), with the original audio
+and no chat overlay.
+
+Voice separation and the loudness measurement are cached per clip in the job's
+`stems/` folder, keyed by the clip's cut and its source file's size and
+modified time, so exporting a clip in both formats (or in a best-of) separates
+it once.
 
 ### Best of the stream
 
