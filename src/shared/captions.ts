@@ -2,6 +2,7 @@
 // what the user sees in review is what gets exported.
 
 import type { Word } from './types'
+import { collapseLoops } from './transcriptLoops'
 import { repairWordTimings } from './wordTiming'
 
 export interface CaptionGroup {
@@ -74,14 +75,16 @@ export function captionAt(groups: CaptionGroup[], t: number): { group: CaptionGr
 
 /**
  * Shifts words to clip-relative time and keeps those inside [0, duration).
- * Repairs stretched timings first, on the clip's full (padded) word list so
- * neighbouring words outside [clipStart, clipEnd) are still there to judge
- * sentence boundaries by. Safe to call on words a job saved before the fix
- * (or already repaired), since the repair is idempotent.
+ * Repairs stretched timings first, then collapses whisper's looping
+ * hallucinations ("of of of") down to one occurrence, both on the clip's full
+ * (padded) word list so neighbouring words outside [clipStart, clipEnd) are
+ * still there to judge sentence boundaries and natural repeats by. Safe to
+ * call on words a job saved before either fix (or already fixed), since both
+ * are idempotent.
  */
 export function clipWords(words: Word[], clipStart: number, clipEnd: number): Word[] {
   const out: Word[] = []
-  for (const w of repairWordTimings(words)) {
+  for (const w of collapseLoops(repairWordTimings(words))) {
     if (w.t1 <= clipStart || w.t0 >= clipEnd) continue
     out.push({ t0: Math.max(0, w.t0 - clipStart), t1: Math.min(clipEnd, w.t1) - clipStart, text: w.text })
   }

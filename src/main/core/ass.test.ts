@@ -54,6 +54,23 @@ describe('clipWords', () => {
     const words = [w(8.7, 9, 'surprise!'), w(9, 10.2, 'mind'), w(10.2, 10.3, 'me')]
     expect(round(clipWords(words, 10, 20))).toEqual([w(0, 0.2, 'mind'), w(0.2, 0.3, 'me')])
   })
+  it('collapses a whisper hallucination loop so a caption never reads "of of of"', () => {
+    const words = [
+      w(9, 9.3, 'Anyway'),
+      w(9.5, 9.7, 'of'),
+      w(9.7, 9.9, 'of'),
+      w(9.9, 10.1, 'of'),
+      w(10.1, 10.3, 'of'),
+      w(10.3, 10.5, 'of'),
+      w(10.5, 10.7, 'of'),
+      w(11, 11.4, 'anyway.')
+    ]
+    expect(clipWords(words, 0, 20).map((x) => x.text)).toEqual(['Anyway', 'of', 'anyway.'])
+  })
+  it('leaves natural short repetition alone ("no no no no")', () => {
+    const words = [w(9, 9.2, 'no'), w(9.2, 9.4, 'no'), w(9.4, 9.6, 'no'), w(9.6, 9.8, 'no'), w(10, 10.3, 'way')]
+    expect(clipWords(words, 0, 20).map((x) => x.text)).toEqual(['no', 'no', 'no', 'no', 'way'])
+  })
 })
 
 describe('ASS helpers', () => {
