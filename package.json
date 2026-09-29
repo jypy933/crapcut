@@ -1,7 +1,7 @@
 {
   "name": "crapcut",
   "productName": "CrapCut",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Turn a stream VOD into short captioned clips, locally.",
   "license": "MIT",
   "author": "jypy933",
