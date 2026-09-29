@@ -9,6 +9,13 @@ export interface Word {
   text: string
 }
 
+/** One chat message, time in seconds from the start of the VOD. */
+export interface ChatMessage {
+  t: number
+  user: string
+  text: string
+}
+
 /** A time range in seconds from the start of the VOD. */
 export interface Range {
   start: number
@@ -136,6 +143,10 @@ export interface Clip {
   /** Caption words for this clip (VOD seconds), editable. */
   words: Word[]
   captions: CaptionSettings
+  /** Chat messages in this clip's time range (VOD seconds), padded like `words`. */
+  chatMessages: ChatMessage[]
+  /** Shows the chat overlay for this clip. Off by default. */
+  chatOverlay: boolean
   audio: AudioMode
   /** Absolute path of the music file for 'voice_music'. */
   musicPath: string | null
