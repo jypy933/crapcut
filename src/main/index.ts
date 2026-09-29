@@ -8,6 +8,7 @@ import { registerIpc } from './ipc'
 import { handleProtocols, registerSchemes } from './protocols'
 import { hardenApp, hardenSession } from './security'
 import { createServices, type AppServices } from './services'
+import { detectHardware } from './tools/gpu'
 import { createTray } from './tray'
 import { initLog, logger } from './util/log'
 import { resolvePaths } from './paths'
@@ -21,6 +22,11 @@ const startedHidden = process.argv.includes('--hidden')
 app.setAppUserModelId('io.github.jypy933.crapcut')
 registerSchemes()
 hardenApp(devServer)
+
+// Started now, while Electron itself is still getting ready; the services
+// wait for it (a failure surfaces there, as a startup error).
+const hardwareProbe = detectHardware()
+hardwareProbe.catch(() => {})
 
 let win: BrowserWindow | null = null
 let services: AppServices | null = null
@@ -143,7 +149,7 @@ async function start(): Promise<void> {
   handleProtocols(paths, join(appDir, 'out', 'renderer'))
 
   try {
-    services = await createServices(resources, () => win)
+    services = await createServices(resources, () => win, hardwareProbe)
   } catch (err) {
     log.error('startup failed', err)
     dialog.showErrorBox('CrapCut could not start', 'Something went wrong while starting. The log file has details.')

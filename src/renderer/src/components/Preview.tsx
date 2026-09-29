@@ -7,25 +7,31 @@ import type { Clip, Layout } from '@shared/types'
 import { drawFrame } from '../lib/compose'
 import { Spinner } from './ui'
 
+/** How often the parent hears about the playhead while playing. */
+const REPORT_MS = 100
+
 interface Props {
   clip: Clip
   src: string
   layout: Layout
   format: RenderFormat
   videoRef: RefObject<HTMLVideoElement | null>
-  /** VOD time of the playhead. */
-  time: number
+  /** Reports the playhead's VOD time, throttled while playing. */
   onTime: (t: number) => void
   onPlaying: (p: boolean) => void
   onCaptionY: (y: number) => void
 }
 
-export function Preview({ clip, src, layout, format, videoRef, time, onTime, onPlaying, onCaptionY }: Props): ReactNode {
+export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying, onCaptionY }: Props): ReactNode {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [ready, setReady] = useState(false)
   const [dragY, setDragY] = useState<number | null>(null)
+  // The playhead, updated every drawn frame. Only this component follows it
+  // that closely; the parent gets a throttled copy so the whole Review screen
+  // does not re-render at the display's refresh rate.
+  const [time, setTime] = useState(0)
   // The clip's own source video, for facecam geometry; a plausible guess until it loads.
   const [naturalSize, setNaturalSize] = useState({ width: 1920, height: 1080 })
   const aspect = format === 'vertical' ? 9 / 16 : 16 / 9
@@ -49,52 +55,69 @@ export function Preview({ clip, src, layout, format, videoRef, time, onTime, onP
     return () => ro.disconnect()
   }, [aspect])
 
-  // Draw loop: every animation frame while playing, once after seeks.
+  // Draw loop: once per decoded video frame while playing, once after seeks.
   useEffect(() => {
     const v = videoRef.current
     const c = canvas.current
     if (!v || !c) return
     const ctx = c.getContext('2d')
     if (!ctx) return
-    let raf = 0
-    const draw = (): void => {
+    let frame = 0
+    let lastReport = 0
+    const report = (t: number, force: boolean): void => {
+      setTime(t)
+      const now = performance.now()
+      if (force || now - lastReport >= REPORT_MS) {
+        lastReport = now
+        onTime(t)
+      }
+    }
+    const draw = (force: boolean): void => {
       drawFrame(ctx, v, layout, format)
       const t = sourceStart + v.currentTime
       if (!v.paused && t >= clip.end) {
         v.currentTime = Math.max(0, clip.start - sourceStart)
       }
-      onTime(t)
+      report(t, force)
+    }
+    // requestVideoFrameCallback fires once per new video frame (30 fps video
+    // on a 60+ Hz display draws half as often as requestAnimationFrame).
+    const hasVfc = typeof v.requestVideoFrameCallback === 'function'
+    const cancel = (): void => {
+      if (hasVfc) v.cancelVideoFrameCallback(frame)
+      else cancelAnimationFrame(frame)
     }
     const loop = (): void => {
-      draw()
-      raf = requestAnimationFrame(loop)
+      draw(false)
+      frame = hasVfc ? v.requestVideoFrameCallback(loop) : requestAnimationFrame(loop)
     }
     const onPlay = (): void => {
       onPlaying(true)
-      cancelAnimationFrame(raf)
+      cancel()
       loop()
     }
     const onPause = (): void => {
       onPlaying(false)
-      cancelAnimationFrame(raf)
-      draw()
+      cancel()
+      draw(true)
     }
+    const onSeeked = (): void => draw(true)
     const onReady = (): void => {
       setReady(true)
       if (v.videoWidth && v.videoHeight) setNaturalSize({ width: v.videoWidth, height: v.videoHeight })
-      draw()
+      draw(true)
     }
     v.addEventListener('play', onPlay)
     v.addEventListener('pause', onPause)
-    v.addEventListener('seeked', draw)
+    v.addEventListener('seeked', onSeeked)
     v.addEventListener('loadeddata', onReady)
     if (v.readyState >= 2) onReady()
     if (!v.paused) onPlay()
     return () => {
-      cancelAnimationFrame(raf)
+      cancel()
       v.removeEventListener('play', onPlay)
       v.removeEventListener('pause', onPause)
-      v.removeEventListener('seeked', draw)
+      v.removeEventListener('seeked', onSeeked)
       v.removeEventListener('loadeddata', onReady)
     }
   }, [videoRef, layout, format, clip.start, clip.end, sourceStart, onTime, onPlaying, size])

@@ -264,7 +264,6 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
                   layout={layout}
                   format={format}
                   videoRef={video}
-                  time={time}
                   onTime={setTime}
                   onPlaying={setPlaying}
                   onCaptionY={(y) => void update(clip.id, { captions: { ...clip.captions, y } })}

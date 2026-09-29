@@ -65,17 +65,20 @@ export function parseRange(header: string | null, size: number): { start: number
   return { start, end }
 }
 
+// Bigger reads than the 64 KB default: fewer chunks through the protocol pipe while the player seeks.
+const READ_CHUNK = 1 << 20
+
 function fileResponse(file: string, range: string | null, type: string): Response {
   const size = statSync(file).size
   const r = parseRange(range, size)
   const headers: Record<string, string> = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' }
   if (!r) {
     headers['Content-Length'] = String(size)
-    return new Response(Readable.toWeb(createReadStream(file)) as ReadableStream, { status: 200, headers })
+    return new Response(Readable.toWeb(createReadStream(file, { highWaterMark: READ_CHUNK })) as ReadableStream, { status: 200, headers })
   }
   headers['Content-Length'] = String(r.end - r.start + 1)
   headers['Content-Range'] = `bytes ${r.start}-${r.end}/${size}`
-  return new Response(Readable.toWeb(createReadStream(file, { start: r.start, end: r.end })) as ReadableStream, { status: 206, headers })
+  return new Response(Readable.toWeb(createReadStream(file, { start: r.start, end: r.end, highWaterMark: READ_CHUNK })) as ReadableStream, { status: 206, headers })
 }
 
 const ID = /^[a-z0-9-]{6,64}$/i

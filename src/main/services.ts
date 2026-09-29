@@ -52,10 +52,19 @@ export function licenceNotices(): LicenceNotice[] {
   return [...tools, ...bundled]
 }
 
-export async function createServices(resources: string, getWindow: () => BrowserWindow | null): Promise<AppServices> {
+/**
+ * `hardwareProbe` lets the caller start hardware detection (a few registry
+ * and nvidia-smi processes) before Electron is ready, so it is usually done
+ * by the time the services need it.
+ */
+export async function createServices(
+  resources: string,
+  getWindow: () => BrowserWindow | null,
+  hardwareProbe: Promise<HardwareProfile> = detectHardware()
+): Promise<AppServices> {
   const paths = resolvePaths({ resources, videos: app.getPath('videos') })
   const store = new Store(paths.db)
-  const hardware = await detectHardware()
+  const hardware = await hardwareProbe
   store.set('hardware', hardware)
   const tools = new ToolRegistry(paths.tools, paths.downloads, (url, init) => fetch(url, init))
   const setup = new SetupManager(tools, hardware, paths.root)
