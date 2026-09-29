@@ -36,9 +36,22 @@ describe('captionAt', () => {
   })
 })
 
+/** Rounds to milliseconds so float error from time-shifting does not fail an exact match. */
+function round(words: Word[]): Word[] {
+  return words.map((x) => ({ ...x, t0: Math.round(x.t0 * 1000) / 1000, t1: Math.round(x.t1 * 1000) / 1000 }))
+}
+
 describe('clipWords', () => {
   it('shifts to clip time and trims', () => {
-    expect(clipWords([w(9, 10.5, 'a'), w(11, 12, 'b'), w(30, 31, 'c')], 10, 20)).toEqual([w(0, 0.5, 'a'), w(1, 2, 'b')])
+    expect(round(clipWords([w(9.7, 10.3, 'apple'), w(11, 11.5, 'banana'), w(30, 30.5, 'cherry')], 10, 20))).toEqual([
+      w(0, 0.3, 'apple'),
+      w(1, 1.5, 'banana')
+    ])
+  })
+  it('repairs a stretched word using its neighbours before clipping', () => {
+    // "mind" really said right at 10.2, but whisper stretched it back to 9.
+    const words = [w(8.7, 9, 'surprise!'), w(9, 10.2, 'mind'), w(10.2, 10.3, 'me')]
+    expect(round(clipWords(words, 10, 20))).toEqual([w(0, 0.2, 'mind'), w(0.2, 0.3, 'me')])
   })
 })
 
