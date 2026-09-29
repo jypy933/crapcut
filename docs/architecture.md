@@ -92,6 +92,27 @@ to the CPU automatically. llama.cpp uses its Vulkan build (works on NVIDIA and
 AMD, CPU fallback included). Video encoding tries NVENC / AMF / QSV with a
 one-second test encode and falls back to libx264.
 
+## Setup and optional AI parts
+
+`tools/setup.ts` (`SetupManager`) drives first run: it works out which pinned
+tools and models this PC needs (`tools/manifest.ts`), checks disk space, and
+downloads them one at a time with resume and SHA-256 verification
+(`tools/download.ts`, `tools/registry.ts`). It is "ready" once every required
+part is installed; the language model and voice separation are optional and
+never block that.
+
+Because they are optional, a first run can finish (and leave the setup screen)
+before they are downloaded, or before the user chooses to. The About screen's
+"Optional AI parts" section lets the user download or remove either one at any
+time: `SetupManager.start(only)` and `.remove(only)` take a subset of artifact
+ids instead of everything the PC needs, so a single part can be fetched (or
+freed) without touching the rest. `shared/optionalModels.ts` (pure, shared with
+the renderer) groups the underlying tool/model artifacts into the two plain-
+language parts shown there and picks the 8B or 3B language model per
+`shared/hardware.ts`'s VRAM rule. The moments step only uses a model once
+`ToolRegistry.isInstalled` confirms its marker file and hash match, so a
+partial or cancelled download is never picked up half-done.
+
 ## Tray and autostart
 
 CrapCut keeps a single `Tray` icon for its whole run (`main/tray.ts`), with an
