@@ -34,7 +34,7 @@ import { isCancelled, UserError } from '../util/errors'
 import type { GpuLock } from './gpuLock'
 import { probeMedia, type MediaInfo } from './media'
 import { ensureSfxCache } from './sfxCache'
-import { prepareStems } from './stems'
+import { cachedLoudness, prepareStems, stemCacheKey, type StemCache } from './stems'
 
 export const DEFAULT_LAYOUT: Layout = { id: 'default-blur', name: 'Full frame', kind: 'blur_fill', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } }
 
@@ -78,6 +78,9 @@ export async function renderClipToFile(
   if (duration < 1) throw new UserError('This clip is too short to export.', { retryable: false })
   const seek = start - clip.source.start
 
+  // Kept between renders (the work folder is wiped each time), so a second format of this clip reuses its stems and loudness.
+  const stemCache: StemCache = { dir: join(dir, 'stems'), clipId: clip.id, key: stemCacheKey(seek, duration, input) }
+
   rmSync(workDir, { recursive: true, force: true })
   mkdirSync(join(workDir, 'fonts'), { recursive: true })
   // Only Montserrat needs bundling; other preset fonts are already on Windows.
@@ -85,7 +88,7 @@ export async function renderClipToFile(
   const layout = (clip.layoutId ? deps.store.layout(clip.layoutId) : null) ?? DEFAULT_LAYOUT
 
   if (clip.autoEdit) {
-    await renderAutoEditToFile(deps, clip, format, workDir, outputPath, input, ffmpeg, media, layout, start, end, seek, duration, signal, onProgress)
+    await renderAutoEditToFile(deps, clip, format, workDir, outputPath, input, ffmpeg, media, layout, start, end, seek, duration, stemCache, signal, onProgress)
     return
   }
 
@@ -120,6 +123,7 @@ export async function renderClipToFile(
       seek,
       duration,
       workDir,
+      cache: stemCache,
       signal,
       onProgress: (f) => onProgress(f * stemShare, null)
     })
@@ -134,14 +138,8 @@ export async function renderClipToFile(
     if (clip.audio === 'voice_music' && !clip.musicPath) throw new UserError('Pick a music file for this clip first.', { retryable: false })
   }
 
-  let loudness = null
-  if (audio.kind === 'original') {
-    const measured = await runTool(ffmpeg, buildLoudnessMeasureArgs(input, seek, duration), { signal }).catch((err) => {
-      if (isCancelled(err)) throw err
-      return null
-    })
-    loudness = measured ? parseLoudnessMeasure(measured.stderr) : null
-  }
+  let loudness: LoudnessMeasurement | null = null
+  if (audio.kind === 'original') loudness = await cachedLoudness(stemCache, () => measureLoudness(ffmpeg, input, seek, duration, signal))
 
   const spec = (encoder: EncoderId): RenderSpec => ({
     input,
@@ -185,6 +183,15 @@ export async function renderClipToFile(
   }
 }
 
+/** First loudnorm pass over the clip's plain cut; null when it could not be measured (the render then normalises in one pass). */
+async function measureLoudness(ffmpeg: string, input: string, seek: number, duration: number, signal: AbortSignal): Promise<LoudnessMeasurement | null> {
+  const measured = await runTool(ffmpeg, buildLoudnessMeasureArgs(input, seek, duration), { signal }).catch((err) => {
+    if (isCancelled(err)) throw err
+    return null
+  })
+  return measured ? parseLoudnessMeasure(measured.stderr) : null
+}
+
 /**
  * The `clip.autoEdit` path: builds the house-look EDL and renders it with
  * `buildEdlRenderArgs` instead of the plain `buildRenderArgs`. Layout, audio
@@ -207,6 +214,7 @@ async function renderAutoEditToFile(
   end: number,
   seek: number,
   duration: number,
+  stemCache: StemCache,
   signal: AbortSignal,
   onProgress: (f: number, etaSec: number | null) => void
 ): Promise<void> {
@@ -250,6 +258,7 @@ async function renderAutoEditToFile(
       seek,
       duration,
       workDir,
+      cache: stemCache,
       signal,
       onProgress: (f) => onProgress(f * stemShare, null)
     })
@@ -270,11 +279,7 @@ async function renderAutoEditToFile(
     // the same approximation the plain path already makes for a stems export
     // (no measurement at all there), just one step short of exact here since
     // the EDL never invents sound, only rearranges what was measured.
-    const measured = await runTool(ffmpeg, buildLoudnessMeasureArgs(input, seek, duration), { signal }).catch((err) => {
-      if (isCancelled(err)) throw err
-      return null
-    })
-    loudness = measured ? parseLoudnessMeasure(measured.stderr) : null
+    loudness = await cachedLoudness(stemCache, () => measureLoudness(ffmpeg, input, seek, duration, signal))
   }
 
   const filterScript = 'graph.txt'
