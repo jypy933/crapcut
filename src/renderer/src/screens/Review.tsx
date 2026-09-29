@@ -499,9 +499,9 @@ function CaptionLines({
           now={rel >= g.start && rel < g.end}
           onSeek={() => onSeek(clip.start + g.start)}
           onText={(text) => {
-            // Groups are clip-relative; edit in VOD time.
-            const vodGroup = { ...g, start: g.start + clip.start, end: g.end + clip.start, words: g.words.map((w) => ({ ...w, t0: w.t0 + clip.start, t1: w.t1 + clip.start })) }
-            onWords(editGroupText(words, vodGroup, text))
+            // `g` is clip-relative; `words` (clip.words) is in VOD time, so
+            // pass clip.start to line the two up.
+            onWords(editGroupText(words, g, text, clip.start))
           }}
         />
       ))}
