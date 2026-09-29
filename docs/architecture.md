@@ -207,16 +207,19 @@ exporter's encoder choice.
 ## Hardware
 
 `tools/gpu.ts` reads the display adapters from the registry (and `nvidia-smi`
-on NVIDIA). whisper.cpp uses the CUDA build on NVIDIA (driver ≥ 452.39,
-≥ 3.5 GB VRAM), a Vulkan build on AMD cards with >= 3.5 GB VRAM, and the CPU
+on NVIDIA). whisper.cpp uses the CUDA build on NVIDIA (driver >= 452.39,
+>= 3.5 GB VRAM), a Vulkan build on AMD cards with >= 3.5 GB VRAM, and the CPU
 build otherwise; if the GPU run fails it falls back to the CPU automatically.
 whisper.cpp has no official Windows Vulkan build, so `whisper-vulkan` is built
 by this repo's CI ([whisper-vulkan.yml](../.github/workflows/whisper-vulkan.yml))
 from the pinned v1.9.4 source and published as a `tools-whisper-vulkan-*`
-prerelease, like the voice separator. On an RX 9060 XT the large model runs roughly
-10 to 30 times faster than real time there (the CPU small model manages about 4). llama.cpp uses its Vulkan build (works on
-NVIDIA and AMD, CPU fallback included). Video encoding tries NVENC / AMF / QSV with a
-one-second test encode and falls back to libx264.
+prerelease, like the voice separator. On an RX 9060 XT the large model runs
+roughly 10 to 30 times faster than real time (the CPU small model manages
+about 4). Faster GPU builds like this one are optional: a PC set up before an
+update added one gets it fetched in the background (`tools/accelerators.ts`)
+and keeps using the CPU until it is installed. llama.cpp uses its Vulkan build
+(works on NVIDIA and AMD, CPU fallback included). Video encoding tries NVENC /
+AMF / QSV with a one-second test encode and falls back to libx264.
 
 ## Setup and optional AI parts
 

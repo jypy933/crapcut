@@ -150,7 +150,9 @@ export const ARTIFACTS: readonly Artifact[] = [
       url: 'https://github.com/ggml-org/whisper.cpp/blob/master/LICENSE',
       note: 'Built by CrapCut CI from whisper.cpp v1.9.4 with the Vulkan backend'
     },
-    optional: false,
+    // Only makes transcription faster; without it the CPU build does the work.
+    // Fetched in the background on a PC set up before it existed (tools/accelerators.ts).
+    optional: true,
     needed: (hw) => hw.whisper === 'vulkan'
   },
   {

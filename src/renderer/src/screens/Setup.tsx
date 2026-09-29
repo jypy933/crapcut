@@ -50,7 +50,7 @@ export function Setup({ status }: { status: SetupStatus }): ReactNode {
               {(c.state === 'downloading' || c.state === 'verifying' || c.state === 'installing') && (
                 <ProgressBar value={c.state === 'downloading' ? c.progress : 1} good={c.state !== 'downloading'} />
               )}
-              {c.state === 'failed' && c.optional && <div className="small faint">Optional. CrapCut still works, clips just get simpler titles.</div>}
+              {c.state === 'failed' && c.optional && <div className="small faint">Optional. CrapCut still works without it.</div>}
             </div>
             <span className="small faint" style={{ textAlign: 'right' }}>
               {c.state === 'verifying' ? 'Checking...' : c.state === 'installing' ? 'Installing...' : formatBytes(c.sizeBytes)}

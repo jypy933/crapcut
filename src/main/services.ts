@@ -13,9 +13,10 @@ import { GpuLock } from './pipeline/gpuLock'
 import { JobRunner } from './pipeline/runner'
 import { stemsAvailable } from './pipeline/stems'
 import { Store } from './store'
+import { acceleratorsToFetch } from './tools/accelerators'
 import { detectHardware } from './tools/gpu'
 import { shouldAutoFetchReplacement } from './tools/llmMigration'
-import { artifact, ARTIFACTS, BUNDLED_NOTICES } from './tools/manifest'
+import { artifact, ARTIFACTS, BUNDLED_NOTICES, type ToolId } from './tools/manifest'
 import { ToolRegistry } from './tools/registry'
 import { SetupManager } from './tools/setup'
 import { Updater } from './updater'
@@ -110,7 +111,12 @@ export async function createServices(
   // swap gets the new one fetched right away, no click needed; the old model
   // keeps serving the moments step until the download is verified and
   // installed (see tools/llmMigration.ts and SetupManager.retireLegacyLlm).
-  if (shouldAutoFetchReplacement(hardware, (id) => tools.isInstalled(artifact(id)))) void setup.start(['model-llm-9b'])
+  const installed = (id: ToolId): boolean => tools.isInstalled(artifact(id))
+  // One background run (a second start() would be ignored while the first
+  // is running): GPU builds added by an update first, as they are small.
+  const autoFetch: ToolId[] = setup.isReady() ? acceleratorsToFetch(hardware, installed) : []
+  if (shouldAutoFetchReplacement(hardware, installed)) autoFetch.push('model-llm-9b')
+  if (autoFetch.length) void setup.start(autoFetch)
   const channelWatch = new ChannelWatchService({ store, tools, isReady: () => setup.isReady(), enqueueJob: (jobId) => runner.enqueue(jobId) })
   channelWatch.onChange((s) => sendEvent(getWindow(), 'channelWatch:changed', s))
   // Autostart's default follows the channel watch until the user picks explicitly.
