@@ -26,8 +26,12 @@ import {
   topChat,
   type Refined
 } from '../core/llmPrompt'
+import { clipFacts } from '../core/clipFacts'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
 import { fallbackTitle, findCandidates, maxClipCount, MIN_CLIPS, scoreToStrength, selectByQuality, type Candidate } from '../core/moments'
+import { pickStructure } from '../core/structurePick'
+import { pickStructureWithLlm, STRUCTURE_SYSTEM_PROMPT } from '../core/structureLlm'
+import { computeSignals } from '../core/structureSignals'
 import { deriveTasteAdjustments, type TasteAdjustments } from '../core/taste'
 import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
 import type { AppPaths } from '../paths'
@@ -350,9 +354,9 @@ async function moments(ctx: StepContext): Promise<void> {
   ctx.log.info(`${messages.length} chat messages, ${candidates.length} candidates, ceiling ${ceiling}`)
 
   const llm = await openLlm(ctx)
-  let refined: (Refined | null)[] = candidates.map(() => null)
-  let scanned: Pick[] = []
   try {
+    let refined: (Refined | null)[] = candidates.map(() => null)
+    let scanned: Pick[] = []
     if (llm) refined = await refineCandidates(ctx, llm, meta, candidates, messages, words, duration)
     const keptCount = candidates.filter((_, i) => refined[i]?.keep !== false).length
     // A quiet chat gives too few moments: let the model read the transcript too.
@@ -360,68 +364,87 @@ async function moments(ctx: StepContext): Promise<void> {
       const avoid = [...muted, ...candidates.map((c) => c.window)]
       scanned = await scanTranscript(ctx, llm, meta, words, avoid, duration, adjustments)
     }
+
+    let picks: Pick[] = candidates.map((cand, i) => {
+      const r = refined[i] ?? null
+      const window = r?.window ?? cand.window
+      const rating = r?.rating ?? null
+      const score = combinedScore(cand.score, rating)
+      return {
+        cand,
+        refined: r,
+        window,
+        title: r?.title ?? fallbackTitle(words, window),
+        score,
+        strength: cand.strength * ratingFactor(rating),
+        chatZ: cand.chatZ,
+        audioZ: cand.audioZ,
+        rating
+      }
+    })
+    const kept = picks.filter((p) => p.refined?.keep !== false)
+    // If the model rejected nearly everything, trust the signals for a few.
+    picks = kept.length >= Math.min(3, picks.length) ? kept : picks
+    const chosen = selectByQuality([...picks, ...scanned], MIN_CLIPS, ceiling)
+    if (chosen.length === 0) {
+      ctx.store.replaceClips(ctx.job.id, [])
+      throw new UserError('No stand-out moments were found in this VOD. Chat and audio stayed calm the whole time.', { retryable: false })
+    }
+
+    const defaultLayoutId = ctx.store.get<string>('defaultLayoutId')
+    const storedStyle = ctx.store.get<string>('defaultCaptionStyleId')
+    const defaultStyleId = storedStyle && isCaptionStyleId(storedStyle) ? storedStyle : DEFAULT_CAPTION_STYLE
+    const clips: Clip[] = chosen.map((p, i) => ({
+      id: randomUUID(),
+      jobId: ctx.job.id,
+      rank: i + 1,
+      score: Math.round(p.score * 100) / 100,
+      title: p.title,
+      start: p.window.start,
+      end: p.window.end,
+      suggested: { ...p.window },
+      source: null,
+      status: 'pending',
+      words: wordsIn(words, p.window.start - CLIP_PAD_SEC, p.window.end + CLIP_PAD_SEC),
+      captions: { enabled: true, y: 0.72, uppercase: true, styleId: defaultStyleId },
+      chatMessages: chatIn(messages, p.window.start - CLIP_PAD_SEC, p.window.end + CLIP_PAD_SEC),
+      chatOverlay: false,
+      audio: 'original',
+      musicPath: null,
+      layoutId: defaultLayoutId && ctx.store.layout(defaultLayoutId) ? defaultLayoutId : null,
+      formats: { vertical: true, horizontal: false },
+      reason: p.cand.reasons.join(' · '),
+      signals: { chatZ: p.cand.chatZ, audioZ: p.cand.audioZ, score: p.cand.score, rating: p.refined?.rating ?? null, source: sourceOf(p.cand) },
+      structureDecision: null,
+      autoEdit: true
+    }))
+
+    // The one automatic re-edit structure for each clip, while the language
+    // model (if any) is still running -- reusing it here instead of loading a
+    // second one later, honouring the one-model-at-a-time GPU lock. Without
+    // it, the heuristic alone decides; either way this never blocks a clip
+    // from being reviewed (a request that fails just falls back, see
+    // `pickStructureWithLlm`).
+    for (const clip of clips) {
+      throwIfAborted(ctx.signal)
+      const signals = computeSignals(clipFacts(clip, loudness, 0))
+      clip.structureDecision = llm
+        ? await pickStructureWithLlm({ signals, words: clip.words, chatMessages: clip.chatMessages, clipStartSec: clip.start }, (prompt, schema) =>
+            llm.server.complete([{ role: 'system', content: STRUCTURE_SYSTEM_PROMPT }, { role: 'user', content: prompt }], schema, ctx.signal)
+          )
+        : pickStructure(signals, clip.words, clip.start)
+    }
+
+    await writeJsonAtomic(join(ctx.dir, 'moments.json'), {
+      candidates,
+      refined,
+      scanned: scanned.map((p) => ({ window: p.window, title: p.title, score: p.score })),
+      chosen: clips.map((c) => c.id)
+    })
+    ctx.store.replaceClips(ctx.job.id, clips)
   } finally {
     llm?.close()
   }
-
-  let picks: Pick[] = candidates.map((cand, i) => {
-    const r = refined[i] ?? null
-    const window = r?.window ?? cand.window
-    const rating = r?.rating ?? null
-    const score = combinedScore(cand.score, rating)
-    return {
-      cand,
-      refined: r,
-      window,
-      title: r?.title ?? fallbackTitle(words, window),
-      score,
-      strength: cand.strength * ratingFactor(rating),
-      chatZ: cand.chatZ,
-      audioZ: cand.audioZ,
-      rating
-    }
-  })
-  const kept = picks.filter((p) => p.refined?.keep !== false)
-  // If the model rejected nearly everything, trust the signals for a few.
-  picks = kept.length >= Math.min(3, picks.length) ? kept : picks
-  const chosen = selectByQuality([...picks, ...scanned], MIN_CLIPS, ceiling)
-  if (chosen.length === 0) {
-    ctx.store.replaceClips(ctx.job.id, [])
-    throw new UserError('No stand-out moments were found in this VOD. Chat and audio stayed calm the whole time.', { retryable: false })
-  }
-
-  const defaultLayoutId = ctx.store.get<string>('defaultLayoutId')
-  const storedStyle = ctx.store.get<string>('defaultCaptionStyleId')
-  const defaultStyleId = storedStyle && isCaptionStyleId(storedStyle) ? storedStyle : DEFAULT_CAPTION_STYLE
-  const clips: Clip[] = chosen.map((p, i) => ({
-    id: randomUUID(),
-    jobId: ctx.job.id,
-    rank: i + 1,
-    score: Math.round(p.score * 100) / 100,
-    title: p.title,
-    start: p.window.start,
-    end: p.window.end,
-    suggested: { ...p.window },
-    source: null,
-    status: 'pending',
-    words: wordsIn(words, p.window.start - CLIP_PAD_SEC, p.window.end + CLIP_PAD_SEC),
-    captions: { enabled: true, y: 0.72, uppercase: true, styleId: defaultStyleId },
-    chatMessages: chatIn(messages, p.window.start - CLIP_PAD_SEC, p.window.end + CLIP_PAD_SEC),
-    chatOverlay: false,
-    audio: 'original',
-    musicPath: null,
-    layoutId: defaultLayoutId && ctx.store.layout(defaultLayoutId) ? defaultLayoutId : null,
-    formats: { vertical: true, horizontal: false },
-    reason: p.cand.reasons.join(' · '),
-    signals: { chatZ: p.cand.chatZ, audioZ: p.cand.audioZ, score: p.cand.score, rating: p.refined?.rating ?? null, source: sourceOf(p.cand) }
-  }))
-  await writeJsonAtomic(join(ctx.dir, 'moments.json'), {
-    candidates,
-    refined,
-    scanned: scanned.map((p) => ({ window: p.window, title: p.title, score: p.score })),
-    chosen: clips.map((c) => c.id)
-  })
-  ctx.store.replaceClips(ctx.job.id, clips)
 }
 
 interface LlmSession {
