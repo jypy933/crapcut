@@ -116,6 +116,84 @@ describe('JobRunner', () => {
     expect(seen).toEqual(['moments'])
   })
 
+  it('downloads the chat beside the audio steps and waits for it before moments', async () => {
+    let audioStarted = false
+    let chatDone = false
+    let momentsSawChat = false
+    const r = runner({
+      chat: async (ctx) => {
+        // Only finishes once the audio step has started, so this would hang if run in order.
+        while (!audioStarted) {
+          if (ctx.signal.aborted) throw new CancelledError()
+          await new Promise((res) => setTimeout(res, 2))
+        }
+        await new Promise((res) => setTimeout(res, 20))
+        chatDone = true
+      },
+      audio: async () => {
+        audioStarted = true
+      },
+      moments: async () => {
+        momentsSawChat = chatDone
+      }
+    })
+    const id = store.createJob('u', '10')
+    r.enqueue(id)
+    await settle(id, ['review'])
+    expect(momentsSawChat).toBe(true)
+  })
+
+  it('stops the audio steps when the chat download fails for good', async () => {
+    let transcribeStopped = false
+    const r = runner({
+      chat: async () => {
+        await new Promise((res) => setTimeout(res, 20))
+        throw new UserError('Could not find the chat for that VOD.', { retryable: false })
+      },
+      transcribe: (ctx) =>
+        new Promise<void>((_, reject) => {
+          ctx.signal.addEventListener('abort', () => {
+            transcribeStopped = true
+            reject(new CancelledError())
+          })
+        })
+    })
+    const id = store.createJob('u', '11')
+    r.enqueue(id)
+    const job = await settle(id, ['failed'])
+    await new Promise((res) => setTimeout(res, 20))
+    const after = store.job(id)!
+    expect(transcribeStopped).toBe(true)
+    expect(job.error).toBe('Could not find the chat for that VOD.')
+    expect(after.status).toBe('failed')
+    expect(after.steps.chat.status).toBe('failed')
+    expect(after.steps.transcribe.status).toBe('pending')
+  })
+
+  it('stops the chat download when an audio step fails for good', async () => {
+    let chatStopped = false
+    const r = runner({
+      chat: (ctx) =>
+        new Promise<void>((_, reject) => {
+          ctx.signal.addEventListener('abort', () => {
+            chatStopped = true
+            reject(new CancelledError())
+          })
+        }),
+      audio: async () => Promise.reject(new UserError('That VOD is for subscribers only.', { retryable: false }))
+    })
+    const id = store.createJob('u', '12')
+    r.enqueue(id)
+    await settle(id, ['failed'])
+    await new Promise((res) => setTimeout(res, 20))
+    const after = store.job(id)!
+    expect(chatStopped).toBe(true)
+    expect(after.status).toBe('failed')
+    expect(after.error).toBe('That VOD is for subscribers only.')
+    expect(after.steps.chat.status).toBe('pending')
+    expect(r.hasWork()).toBe(false)
+  })
+
   it('pauses a running step and continues later', async () => {
     let started = false
     let runs = 0

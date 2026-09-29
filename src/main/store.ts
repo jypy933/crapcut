@@ -196,7 +196,9 @@ export class Store {
         steps[s.step as StepId] = { status: s.status as StepState['status'], progress: s.progress, etaSec: s.eta_sec, detail: s.detail }
       }
     }
-    const currentStep = STEP_IDS.find((s) => steps[s].status !== 'done' && steps[s].status !== 'skipped') ?? null
+    // The chat download runs beside the audio steps; show the later, longer one.
+    const currentStep =
+      STEP_IDS.filter((s) => steps[s].status === 'running').at(-1) ?? STEP_IDS.find((s) => steps[s].status !== 'done' && steps[s].status !== 'skipped') ?? null
     const clipCount = (this.db.prepare('SELECT COUNT(*) AS n FROM clips WHERE job_id = ?').get(row.id) as { n: number }).n
     return {
       id: row.id,

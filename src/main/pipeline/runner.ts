@@ -18,6 +18,9 @@ const log = logger('runner')
 
 const MAX_AUTO_RETRIES = 3
 
+/** The first step that reads the chat log; the chat download must be done by then. */
+const CHAT_NEEDED_BY: StepId = 'moments'
+
 type StopReason = 'pause' | 'cancel' | 'delete'
 
 export interface RunnerEvents {
@@ -124,6 +127,7 @@ export class JobRunner {
     } finally {
       this.running = null
       this.active = null
+      this.lastEmit.delete(id)
       void this.pump()
     }
   }
@@ -134,18 +138,46 @@ export class JobRunner {
     this.store.setJobStatus(id, 'running')
     this.emit(id, true)
 
-    for (const step of STEP_IDS) {
-      const job = this.store.job(id)
-      if (!job) return
-      if (job.steps[step].status === 'done' || job.steps[step].status === 'skipped') continue
-      // Once the VOD length is known, make sure the downloads will fit.
-      if (step !== 'metadata' && job.vod && !(await this.enoughDisk(job.vod.durationSec, job.steps))) {
-        this.store.setJobStatus(id, 'failed', 'Not enough free disk space for this VOD. Free a few GB and try again.')
-        this.emit(id, true)
-        return
+    // The chat download only needs the VOD id, and nothing reads the chat
+    // before the moments step, so it runs beside the audio download and
+    // transcription instead of before them. A failure on either side stops
+    // the other; a pause or cancel stops both through `signal`.
+    const sideStop = new AbortController()
+    const mainStop = new AbortController()
+    const mainSignal = AbortSignal.any([signal, mainStop.signal])
+    let side: Promise<boolean> | null = null
+    try {
+      for (const step of STEP_IDS) {
+        if (mainSignal.aborted) return
+        const job = this.store.job(id)
+        if (!job) return
+        if (step === CHAT_NEEDED_BY && side) {
+          const ok = await side
+          side = null
+          if (!ok) return
+        }
+        if (job.steps[step].status === 'done' || job.steps[step].status === 'skipped') continue
+        // Once the VOD length is known, make sure the downloads will fit.
+        if (step !== 'metadata' && job.vod && !(await this.enoughDisk(job.vod.durationSec, job.steps))) {
+          this.store.setJobStatus(id, 'failed', 'Not enough free disk space for this VOD. Free a few GB and try again.')
+          this.emit(id, true)
+          return
+        }
+        if (step === 'chat') {
+          side = this.runStep(job, step, dir, AbortSignal.any([signal, sideStop.signal]), signal).then((ok) => {
+            if (!ok) mainStop.abort()
+            return ok
+          })
+          continue
+        }
+        const ok = await this.runStep(job, step, dir, mainSignal, signal)
+        if (!ok) return
       }
-      const ok = await this.runStep(job, step, dir, signal)
-      if (!ok) return
+    } finally {
+      if (side) {
+        sideStop.abort()
+        await side
+      }
     }
     this.store.setJobStatus(id, 'review')
     const done = this.store.job(id)
@@ -163,8 +195,13 @@ export class JobRunner {
     return free >= need
   }
 
-  /** Runs one step with retries. Returns false when the job should stop. */
-  private async runStep(job: JobSummary, step: StepId, dir: string, signal: AbortSignal): Promise<boolean> {
+  /**
+   * Runs one step with retries. Returns false when the job should stop.
+   * `jobSignal` is the job's own pause/cancel signal; when only `signal` is
+   * aborted (a step running beside this one failed), the step just goes back
+   * to pending and the job status is left to the step that failed.
+   */
+  private async runStep(job: JobSummary, step: StepId, dir: string, signal: AbortSignal, jobSignal: AbortSignal = signal): Promise<boolean> {
     const id = job.id
     const eta = new EtaEstimator()
     for (let attempt = 0; ; attempt++) {
@@ -199,6 +236,10 @@ export class JobRunner {
         if (isCancelled(err) || signal.aborted) {
           const reason = this.active?.reason ?? 'pause'
           this.store.setStep(id, step, { status: 'pending', etaSec: null, detail: null })
+          if (!jobSignal.aborted) {
+            this.emit(id, true)
+            return false
+          }
           if (reason !== 'delete') this.store.setJobStatus(id, reason === 'cancel' ? 'cancelled' : 'paused')
           this.emit(id, true)
           return false
