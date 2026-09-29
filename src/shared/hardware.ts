@@ -11,3 +11,12 @@ export const LLM_8B_MIN_VRAM_MB = 7000
 export function canRunBigLlm(hw: HardwareProfile): boolean {
   return hw.llm === 'vulkan' && (hw.primary?.vramMb ?? 0) >= LLM_8B_MIN_VRAM_MB
 }
+
+/**
+ * Whether the whole VOD was transcribed with the fast, less accurate model,
+ * so its chosen clips are worth a second, slower pass for cleaner captions.
+ * NVIDIA machines already transcribe the whole VOD with the large model.
+ */
+export function needsClipCaptionPass(hw: Pick<HardwareProfile, 'whisper'>): boolean {
+  return hw.whisper === 'cpu'
+}
