@@ -20,6 +20,7 @@ import {
   excerptLines,
   excerptRange,
   parseAnswer,
+  ratingFactor,
   scanWindows,
   SYSTEM_PROMPT,
   topChat,
@@ -306,16 +307,19 @@ interface Pick {
   /** 0..1, shown to him and blended with the model's rating when present. */
   score: number
   /**
-   * Raw, unbounded signal strength, used only to rank and quality-gate the
-   * final selection. Kept separate from `score`: once `score` is bounded to
-   * 0..1 (see `strengthToScore`), a very strong candidate cannot be told
-   * apart from a merely decent one, and a quality bar relative to the
-   * strongest candidate needs that difference to mean anything.
+   * Raw signal strength scaled by the model's rating when there is one (see
+   * `ratingFactor`), used only to rank and quality-gate the final selection.
+   * Kept separate from `score`: once `score` is bounded to 0..1 (see
+   * `strengthToScore`), a very strong candidate cannot be told apart from a
+   * merely decent one, and a quality bar relative to the strongest candidate
+   * needs that difference to mean anything.
    */
   strength: number
   /** Copied from `cand`: which signals quality-gating treats this as coming from. */
   chatZ: number
   audioZ: number
+  /** The model's 1..10 rating, or null with no model -- see `selectByQuality`. */
+  rating: number | null
 }
 
 /** Which signal a candidate mainly came from, for taste learning. */
@@ -363,8 +367,19 @@ async function moments(ctx: StepContext): Promise<void> {
   let picks: Pick[] = candidates.map((cand, i) => {
     const r = refined[i] ?? null
     const window = r?.window ?? cand.window
-    const score = combinedScore(cand.score, r?.rating ?? null)
-    return { cand, refined: r, window, title: r?.title ?? fallbackTitle(words, window), score, strength: cand.strength, chatZ: cand.chatZ, audioZ: cand.audioZ }
+    const rating = r?.rating ?? null
+    const score = combinedScore(cand.score, rating)
+    return {
+      cand,
+      refined: r,
+      window,
+      title: r?.title ?? fallbackTitle(words, window),
+      score,
+      strength: cand.strength * ratingFactor(rating),
+      chatZ: cand.chatZ,
+      audioZ: cand.audioZ,
+      rating
+    }
   })
   const kept = picks.filter((p) => p.refined?.keep !== false)
   // If the model rejected nearly everything, trust the signals for a few.
@@ -520,8 +535,10 @@ async function scanTranscript(
       const score = combinedScore(transcriptSignal, r.rating)
       // The scan gives a fixed nominal signal, not a z-score; scoreToStrength
       // puts it on the same raw scale as chat- and audio-backed candidates
-      // so the quality bar can compare them fairly.
-      const strength = scoreToStrength(transcriptSignal)
+      // so the quality bar can compare them fairly. It already only reaches
+      // here at or above TRANSCRIPT_MIN_RATING, but still scales with rating
+      // like every other candidate.
+      const strength = scoreToStrength(transcriptSignal) * ratingFactor(r.rating)
       const cand: Candidate = {
         peak: (r.window.start + r.window.end) / 2,
         event: r.window.start,
@@ -532,7 +549,7 @@ async function scanTranscript(
         audioZ: 0,
         reasons: ['Transcript']
       }
-      out.push({ cand, refined: r, window: r.window, title: r.title ?? fallbackTitle(words, r.window), score, strength, chatZ: 0, audioZ: 0 })
+      out.push({ cand, refined: r, window: r.window, title: r.title ?? fallbackTitle(words, r.window), score, strength, chatZ: 0, audioZ: 0, rating: r.rating })
     } catch (err) {
       if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
       ctx.log.warn('model request failed', err)
