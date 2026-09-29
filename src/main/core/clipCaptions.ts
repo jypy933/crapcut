@@ -1,11 +1,32 @@
 // Pure helpers for re-transcribing a chosen clip's own audio with the larger,
-// slower speech model once moments has picked its window. The whole VOD stays
-// on the fast model on the CPU (see `shared/hardware.ts`'s
-// `needsClipCaptionPass`); only the padded range of a kept clip is worth the
-// extra time. See `pipeline/steps.ts`'s `clipCaptions` step, which does the
-// actual cutting and transcribing.
+// slower speech model once moments has picked its window. Stretches of the VOD
+// that ran on the fast model on the CPU (see `shared/hardware.ts`'s
+// `needsClipCaptionPass`) are worth the extra time, and only for the padded
+// range of a kept clip. See `pipeline/steps.ts`'s `clipCaptions` step, which
+// does the actual cutting and transcribing.
 
 import type { Clip, Range, Word } from '@shared/types'
+
+/**
+ * A transcribed chunk as far as this pass cares. `sharp` is written by the
+ * transcribe step when the chunk ran the large model on the GPU (or had no
+ * speech to transcribe); a chunk that fell back to the CPU, or one written
+ * before this was recorded, has it missing or false.
+ */
+export interface ChunkRecord {
+  range: Range
+  sharp?: boolean
+}
+
+/** The stretches of the VOD that were not transcribed with the large model on the GPU. */
+export function fastChunkRanges(chunks: readonly ChunkRecord[]): Range[] {
+  return chunks.filter((c) => c.sharp !== true).map((c) => c.range)
+}
+
+/** Whether a clip's range touches any of the given stretches. */
+export function overlapsAnyRange(range: Range, ranges: readonly Range[]): boolean {
+  return ranges.some((r) => r.start < range.end && r.end > range.start)
+}
 
 /**
  * The VOD-time range to re-transcribe for a clip: its cut plus the same

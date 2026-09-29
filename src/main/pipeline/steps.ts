@@ -15,7 +15,7 @@ import { collapseLoops } from '@shared/transcriptLoops'
 import { isStretchedWord, repairWordTimings } from '@shared/wordTiming'
 import { bestLag, envelope, pcm16ToFloat } from '../core/align'
 import { parseChatLog } from '../core/chat'
-import { clipCaptionRange, resolveClipCaptionWords, shouldSkipClipCaptions } from '../core/clipCaptions'
+import { clipCaptionRange, fastChunkRanges, overlapsAnyRange, resolveClipCaptionWords, shouldSkipClipCaptions, type ChunkRecord } from '../core/clipCaptions'
 import {
   ANSWER_SCHEMA,
   buildPrompt,
@@ -194,7 +194,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
   mkdirSync(outDir, { recursive: true })
 
   const ffmpeg = ctx.tools.require('ffmpeg')
-  const cuda = ctx.hw.whisper === 'cuda' ? ctx.tools.path('whisper-cuda') : null
+  const gpuWhisper = ctx.hw.whisper === 'cuda' ? ctx.tools.path('whisper-cuda') : ctx.hw.whisper === 'vulkan' ? ctx.tools.path('whisper-vulkan') : null
   const cpu = ctx.tools.require('whisper-cpu')
   const large = ctx.tools.path('model-whisper-large')
   const small = ctx.tools.path('model-whisper-small')
@@ -205,9 +205,10 @@ async function transcribe(ctx: StepContext): Promise<void> {
   const root = ctx.paths.root
   const rel = (p: string): string => relative(root, p)
 
-  let useGpu = !!cuda
+  let useGpu = !!gpuWhisper
   let gpuFailures = 0
-  if (useGpu) {
+  // nvidia-smi is the only free-memory reading we have; other cards are not checked.
+  if (useGpu && ctx.hw.whisper === 'cuda') {
     const free = await nvidiaFreeVramMb()
     if (free !== null && free < 2500) {
       ctx.log.warn(`only ${free} MB VRAM free; transcribing on the CPU`)
@@ -233,7 +234,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
       // Skip chunks that are entirely muted.
       const mutedSec = muted.reduce((s, m) => s + Math.max(0, Math.min(chunk.end, m.end) - Math.max(chunk.start, m.start)), 0)
       if (mutedSec >= chunk.end - chunk.start - 1) {
-        await writeJsonAtomic(done, { v: CHUNK_FORMAT, range: chunk, words: [] })
+        await writeJsonAtomic(done, { v: CHUNK_FORMAT, range: chunk, sharp: true, words: [] })
         continue
       }
       const wav = join(outDir, `${name}.wav`)
@@ -242,7 +243,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
       const run = async (gpu: boolean): Promise<void> => {
         onGpu = gpu
         return whisperChunk({
-          whisper: gpu && cuda ? cuda : cpu,
+          whisper: gpu && gpuWhisper ? gpuWhisper : cpu,
           cwd: root,
           model: rel(modelFor(gpu)),
           vadModel: vad ? rel(vad) : null,
@@ -287,7 +288,8 @@ async function transcribe(ctx: StepContext): Promise<void> {
       }
       const placed = placeChunkWords(words, chunk)
       if (placed.dropped > 0) ctx.log.warn(`${name}: dropped ${placed.dropped} of ${parsed.words.length} words timed outside the chunk`)
-      await writeJsonAtomic(done, { v: CHUNK_FORMAT, range: chunk, words: packWords(placed.words) })
+      // Recorded so the clip caption pass knows which stretches still need the large model.
+      await writeJsonAtomic(done, { v: CHUNK_FORMAT, range: chunk, sharp: onGpu && !!large, words: packWords(placed.words) })
       rmSync(`${outBase}.json`, { force: true })
       rmSync(wav, { force: true })
     }
@@ -672,14 +674,39 @@ function clipCaptionMarker(dir: string, clipId: string): string {
   return join(dir, 'clipCaptions', `${clipId}.done`)
 }
 
+/** What the transcribe step recorded for each chunk, in order. Empty when there is no transcript folder. */
+async function readChunkRecords(dir: string): Promise<ChunkRecord[]> {
+  const folder = join(dir, 'transcript')
+  if (!existsSync(folder)) return []
+  const files = readdirSync(folder)
+    .filter((f) => /^chunk-\d+\.json$/.test(f))
+    .sort()
+  const out: ChunkRecord[] = []
+  for (const f of files) {
+    try {
+      const j = await readJson<{ range?: Range; sharp?: boolean }>(join(folder, f))
+      if (j.range) out.push({ range: j.range, sharp: j.sharp })
+    } catch {
+      // An unreadable chunk record counts as unknown, which the caller treats as not sharp.
+      return []
+    }
+  }
+  return out
+}
+
 /**
  * Re-transcribes each kept clip's own audio range with the large model,
  * which is far too slow for the whole VOD on the CPU but easily affordable on
  * a clip. NVIDIA machines already transcribed the whole VOD with the large
- * model in the `transcribe` step, so there is nothing to sharpen here.
+ * model in the `transcribe` step, so there is nothing to sharpen there. On
+ * Vulkan the whole VOD normally ran the large model too; only the clips that
+ * touch a stretch that fell back to the CPU (or that has no record, from a job
+ * started before the record existed) are re-transcribed.
  */
 async function clipCaptions(ctx: StepContext): Promise<void> {
-  if (!needsClipCaptionPass(ctx.hw)) return
+  const records = ctx.hw.whisper === 'vulkan' ? await readChunkRecords(ctx.dir) : []
+  const fast = fastChunkRanges(records)
+  if (!needsClipCaptionPass(ctx.hw, records.length > 0 && fast.length === 0)) return
   const large = ctx.tools.path('model-whisper-large')
   if (!large) {
     ctx.log.warn('the sharper speech model is missing; keeping the fast-pass captions')
@@ -692,11 +719,15 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
   }
   const meta = await loadMeta(ctx.dir)
   const duration = meta.vod.durationSec
-  const clips = ctx.store.clips(ctx.job.id).filter((c) => !shouldSkipClipCaptions(c))
+  const clips = ctx.store
+    .clips(ctx.job.id)
+    .filter((c) => !shouldSkipClipCaptions(c))
+    .filter((c) => ctx.hw.whisper !== 'vulkan' || records.length === 0 || overlapsAnyRange(clipCaptionRange(c, duration, CLIP_PAD_SEC), fast))
   if (clips.length === 0) return
 
   const ffmpeg = ctx.tools.require('ffmpeg')
   const cpu = ctx.tools.require('whisper-cpu')
+  const gpuWhisper = ctx.hw.whisper === 'vulkan' ? ctx.tools.path('whisper-vulkan') : null
   const vad = ctx.tools.path('model-vad')
   const root = ctx.paths.root
   const rel = (p: string): string => relative(root, p)
@@ -707,6 +738,8 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
   mkdirSync(outDir, { recursive: true })
 
   let failures = 0
+  let useGpu = !!gpuWhisper
+  let gpuFailures = 0
   const release = await ctx.gpu.acquire(ctx.signal)
   try {
     for (let i = 0; i < clips.length; i++) {
@@ -721,20 +754,30 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
       const outBase = join(outDir, `${clip.id}.raw`)
       try {
         await cutAudioSegment(ffmpeg, root, rel(fullAudio), range.start, range.end - range.start, rel(wav), ctx.signal)
-        await whisperChunk({
-          whisper: cpu,
-          cwd: root,
-          model: rel(large),
-          vadModel: vad ? rel(vad) : null,
-          audio: rel(wav),
-          outBase: rel(outBase),
-          language,
-          threads: cpuThreads,
-          gpu: false,
-          beam: 1,
-          signal: ctx.signal,
-          onProgress: report
-        })
+        const run = (gpu: boolean): Promise<void> =>
+          whisperChunk({
+            whisper: gpu && gpuWhisper ? gpuWhisper : cpu,
+            cwd: root,
+            model: rel(large),
+            vadModel: vad ? rel(vad) : null,
+            audio: rel(wav),
+            outBase: rel(outBase),
+            language,
+            threads: gpu ? 4 : cpuThreads,
+            gpu,
+            beam: gpu ? 5 : 1,
+            signal: ctx.signal,
+            onProgress: report
+          })
+        try {
+          await run(useGpu)
+        } catch (err) {
+          if (isCancelled(err) || !useGpu) throw err
+          gpuFailures++
+          ctx.log.warn(`GPU re-transcription failed (${gpuFailures} of ${MAX_GPU_FAILURES}); this clip goes to the CPU`, err)
+          if (gpuFailures >= MAX_GPU_FAILURES) useGpu = false
+          await run(false)
+        }
         const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`))
         let words = parsed.words
         if (words.some((w) => isStretchedWord(w))) {

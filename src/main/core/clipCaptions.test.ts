@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Word } from '@shared/types'
-import { clipCaptionRange, resolveClipCaptionWords, shouldSkipClipCaptions } from './clipCaptions'
+import { clipCaptionRange, fastChunkRanges, overlapsAnyRange, resolveClipCaptionWords, shouldSkipClipCaptions } from './clipCaptions'
 import { placeChunkWords } from './transcript'
 
 function w(t0: number, t1: number, text: string): Word {
@@ -75,5 +75,42 @@ describe('re-transcription offsetting (clipCaptionRange + placeChunkWords)', () 
     const { words, dropped } = placeChunkWords(own, range)
     expect(words).toHaveLength(1)
     expect(dropped).toBe(1)
+  })
+})
+
+describe('fastChunkRanges', () => {
+  const a = { start: 0, end: 600 }
+  const b = { start: 600, end: 1200 }
+  const c = { start: 1200, end: 1500 }
+
+  it('keeps only the chunks that did not run the large model on the GPU', () => {
+    expect(fastChunkRanges([{ range: a, sharp: true }, { range: b, sharp: false }, { range: c, sharp: true }])).toEqual([b])
+  })
+
+  it('treats a chunk with no record as fast (written before the record existed)', () => {
+    expect(fastChunkRanges([{ range: a }, { range: b, sharp: true }])).toEqual([a])
+  })
+
+  it('is empty when every chunk was sharp', () => {
+    expect(fastChunkRanges([{ range: a, sharp: true }, { range: b, sharp: true }])).toEqual([])
+  })
+})
+
+describe('overlapsAnyRange', () => {
+  const ranges = [{ start: 600, end: 1200 }]
+
+  it('is true when the clip range touches a stretch', () => {
+    expect(overlapsAnyRange({ start: 580, end: 640 }, ranges)).toBe(true)
+    expect(overlapsAnyRange({ start: 700, end: 800 }, ranges)).toBe(true)
+    expect(overlapsAnyRange({ start: 1190, end: 1250 }, ranges)).toBe(true)
+  })
+
+  it('is false when the clip range sits fully outside, even edge to edge', () => {
+    expect(overlapsAnyRange({ start: 100, end: 600 }, ranges)).toBe(false)
+    expect(overlapsAnyRange({ start: 1200, end: 1300 }, ranges)).toBe(false)
+  })
+
+  it('is false when there is nothing to overlap', () => {
+    expect(overlapsAnyRange({ start: 0, end: 10_000 }, [])).toBe(false)
   })
 })

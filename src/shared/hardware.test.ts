@@ -13,8 +13,16 @@ describe('canRunBigLlm', () => {
 })
 
 describe('needsClipCaptionPass', () => {
-  it('is only true on the CPU whisper path (NVIDIA already used the large model on the whole VOD)', () => {
-    expect(needsClipCaptionPass({ whisper: 'cpu' })).toBe(true)
-    expect(needsClipCaptionPass({ whisper: 'cuda' })).toBe(false)
+  it('is always true on the CPU whisper path', () => {
+    expect(needsClipCaptionPass({ whisper: 'cpu' }, false)).toBe(true)
+    expect(needsClipCaptionPass({ whisper: 'cpu' }, true)).toBe(true)
+  })
+  it('is never needed on NVIDIA (the large model already ran on the whole VOD)', () => {
+    expect(needsClipCaptionPass({ whisper: 'cuda' }, false)).toBe(false)
+    expect(needsClipCaptionPass({ whisper: 'cuda' }, true)).toBe(false)
+  })
+  it('is only needed on Vulkan when some of the VOD did not run on the GPU', () => {
+    expect(needsClipCaptionPass({ whisper: 'vulkan' }, true)).toBe(false)
+    expect(needsClipCaptionPass({ whisper: 'vulkan' }, false)).toBe(true)
   })
 })

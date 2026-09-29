@@ -13,10 +13,15 @@ export function canRunBigLlm(hw: HardwareProfile): boolean {
 }
 
 /**
- * Whether the whole VOD was transcribed with the fast, less accurate model,
- * so its chosen clips are worth a second, slower pass for cleaner captions.
- * NVIDIA machines already transcribe the whole VOD with the large model.
+ * Whether the chosen clips are worth a second, slower pass for cleaner
+ * captions, because some of the VOD was transcribed with the fast, less
+ * accurate model. NVIDIA machines already transcribe the whole VOD with the
+ * large model. On Vulkan the large model runs on the GPU too, so the pass is
+ * only needed when part of the VOD fell back to the CPU (`allSharp` is false:
+ * a chunk that ran on the CPU, or one with no record of where it ran).
  */
-export function needsClipCaptionPass(hw: Pick<HardwareProfile, 'whisper'>): boolean {
-  return hw.whisper === 'cpu'
+export function needsClipCaptionPass(hw: Pick<HardwareProfile, 'whisper'>, allSharp: boolean): boolean {
+  if (hw.whisper === 'cuda') return false
+  if (hw.whisper === 'vulkan') return !allSharp
+  return true
 }
