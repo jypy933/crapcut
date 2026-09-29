@@ -37,6 +37,7 @@ is already on disk and carries on.
 | audio | yt-dlp (audio only), FFmpeg | `audio.mp4`, `audio16k.wav` (temporary), `loudness.txt`, `muted.json` |
 | transcribe | whisper.cpp, 10-minute chunks cut at quiet seconds | `transcript/chunk-NNN.json` -> `transcript.json` |
 | moments | `core/moments.ts` + llama-server | clips in SQLite, `moments.json` |
+| clip captions | whisper.cpp (CPU, large model), FFmpeg | sharpened `words` on each clip in SQLite |
 | clips | yt-dlp `--download-sections` + audio alignment | `clips/<clip>.mp4` |
 
 ### Finding moments
@@ -70,6 +71,20 @@ is already on disk and carries on.
    audio spikes does not fill up the review list. At least 3 clips are kept
    when any candidates exist, and at most one per 20 minutes of stream
    (capped at 20) to keep review manageable.
+
+### Clip captions
+
+On the CPU, whisper transcribes the whole VOD with the small model for speed
+(the large model would take longer than the stream itself). Once moments has
+picked the clips, the `clipCaptions` step cuts each kept clip's own padded
+range back out of the already-downloaded VOD audio and re-transcribes just
+that with the large model, which is easily affordable per clip; the result is
+offset back onto VOD time, repaired and replaces that clip's `words`. On
+NVIDIA the whole VOD already used the large model, so this step does nothing.
+A clip is skipped if its captions were already hand-edited in Review (only
+possible on a job resumed from before this step existed), and a clip that
+fails re-transcription simply keeps its fast-pass words. Per-clip progress and
+resume mirror the main `transcribe` step's per-chunk checkpoints.
 
 ### Captions and layout
 
