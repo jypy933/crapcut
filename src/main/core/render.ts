@@ -71,56 +71,82 @@ const BLUR_DOWNSCALE = 4
  * out.height` (the format's full size unless a smaller `out` is given, for a
  * throwaway preview), ending in a pad named `base`. Shared with
  * `core/edlFilter.ts`, which runs it on a re-timed stream instead of the raw
- * input, so the input pad is a parameter.
+ * input, so the input pad is a parameter. `prefix` goes in front of every pad
+ * name, so several clips can live in one filter graph (the best-of join).
  */
-export function layoutBaseFilter(inputPad: string, format: RenderFormat, layout: Layout, source: Size, out: Size = OUTPUT_SIZE[format]): string[] {
+export function layoutBaseFilter(inputPad: string, format: RenderFormat, layout: Layout, source: Size, out: Size = OUTPUT_SIZE[format], prefix = ''): string[] {
   const parts: string[] = []
+  const pad = (name: string): string => `[${prefix}${name}]`
 
   if (format === 'horizontal') {
     const game = fitAspect(toPixels(layout.game, source), out.width / out.height, source)
-    parts.push(`[${inputPad}]${crop(game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1[base]`)
+    parts.push(`[${inputPad}]${crop(game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1${pad('base')}`)
   } else if (layout.kind === 'blur_fill') {
     const game = toPixels(layout.game, source)
     // Blur at a quarter of the size (a sigma of 24 at full size is 6 here) and
     // scale the result back up: far fewer pixels for gblur to touch.
     const bg = { width: evenPx(out.width / BLUR_DOWNSCALE), height: evenPx(out.height / BLUR_DOWNSCALE) }
     const sigma = Math.max(1, (24 / BLUR_DOWNSCALE) * (out.width / OUTPUT_SIZE.vertical.width))
-    parts.push(`[${inputPad}]${crop(game)},split=2[bgsrc][fgsrc]`)
+    parts.push(`[${inputPad}]${crop(game)},split=2${pad('bgsrc')}${pad('fgsrc')}`)
     parts.push(
-      `[bgsrc]scale=${bg.width}:${bg.height}:force_original_aspect_ratio=increase:flags=bilinear,crop=${bg.width}:${bg.height},gblur=sigma=${Number(sigma.toFixed(2))},eq=brightness=-0.06,scale=${out.width}:${out.height}:flags=bilinear[bg]`
+      `${pad('bgsrc')}scale=${bg.width}:${bg.height}:force_original_aspect_ratio=increase:flags=bilinear,crop=${bg.width}:${bg.height},gblur=sigma=${Number(sigma.toFixed(2))},eq=brightness=-0.06,scale=${out.width}:${out.height}:flags=bilinear${pad('bg')}`
     )
-    parts.push(`[fgsrc]scale=${out.width}:-2:flags=lanczos[fg]`)
-    parts.push(`[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[base]`)
+    parts.push(`${pad('fgsrc')}scale=${out.width}:-2:flags=lanczos${pad('fg')}`)
+    parts.push(`${pad('bg')}${pad('fg')}overlay=(W-w)/2:(H-h)/2,setsar=1${pad('base')}`)
   } else {
     const g = verticalGeometry(layout, source)
     if (g.cam) {
       // The geometry is worked out for the full-size frame; a smaller output keeps its proportions.
       const camHeight = out.height === OUTPUT_SIZE.vertical.height ? g.camHeight : evenPx((g.camHeight * out.height) / OUTPUT_SIZE.vertical.height)
       const gameHeight = out.height - camHeight
-      parts.push(`[${inputPad}]split=2[camsrc][gamesrc]`)
-      parts.push(`[camsrc]${crop(g.cam)},scale=${out.width}:${camHeight}:flags=lanczos,setsar=1[cam]`)
-      parts.push(`[gamesrc]${crop(g.game)},scale=${out.width}:${gameHeight}:flags=lanczos,setsar=1[game]`)
-      parts.push('[cam][game]vstack=inputs=2[base]')
+      parts.push(`[${inputPad}]split=2${pad('camsrc')}${pad('gamesrc')}`)
+      parts.push(`${pad('camsrc')}${crop(g.cam)},scale=${out.width}:${camHeight}:flags=lanczos,setsar=1${pad('cam')}`)
+      parts.push(`${pad('gamesrc')}${crop(g.game)},scale=${out.width}:${gameHeight}:flags=lanczos,setsar=1${pad('game')}`)
+      parts.push(`${pad('cam')}${pad('game')}vstack=inputs=2${pad('base')}`)
     } else {
-      parts.push(`[${inputPad}]${crop(g.game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1[base]`)
+      parts.push(`[${inputPad}]${crop(g.game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1${pad('base')}`)
     }
   }
   return parts
 }
 
-/** The video part of the filter graph, ending in [vout]. */
-export function videoFilter(spec: RenderSpec): string {
-  const fps = clampFps(spec.sourceFps)
-  const parts = layoutBaseFilter('0:v', spec.format, spec.layout, spec.source, spec.outputSize)
+/** The parts of a `RenderSpec` the video chain reads. */
+export type VideoSpec = Pick<RenderSpec, 'format' | 'layout' | 'source' | 'sourceFps' | 'assFile' | 'fontsDir' | 'outputSize'>
+/** The parts of a `RenderSpec` the audio chain reads. */
+export type AudioSpec = Pick<RenderSpec, 'audio' | 'loudness' | 'duration'>
 
-  let chain = '[base]fps=' + fps
+export interface VideoChainOptions {
+  /** Pad the layout reads from, e.g. `0:v`. */
+  inputPad: string
+  /** Goes in front of every internal pad name, so several clips fit in one graph. */
+  prefix?: string
+  /** Name of the finished pad (without brackets). */
+  outLabel: string
+  /** Output frame rate; the source's, clamped to 24-60, when omitted. */
+  fps?: number
+  /** Extra filters (each starting with a comma) run after the pixel format, before the finished pad. */
+  tail?: string
+}
+
+/** One clip's video chain as labelled pieces: layout, frame rate, captions, pixel format. */
+export function videoChain(spec: VideoSpec, o: VideoChainOptions): string[] {
+  const fps = o.fps ?? clampFps(spec.sourceFps)
+  const prefix = o.prefix ?? ''
+  const parts = layoutBaseFilter(o.inputPad, spec.format, spec.layout, spec.source, spec.outputSize, prefix)
+
+  let chain = `[${prefix}base]fps=` + fps
   if (spec.assFile) {
     chain += `,ass=${filterValue(spec.assFile)}`
     if (spec.fontsDir) chain += `:fontsdir=${filterValue(spec.fontsDir)}`
   }
-  chain += ',format=yuv420p[vout]'
+  chain += `,format=yuv420p${o.tail ?? ''}[${o.outLabel}]`
   parts.push(chain)
-  return parts.join(';')
+  return parts
+}
+
+/** The video part of the filter graph, ending in [vout]. */
+export function videoFilter(spec: RenderSpec): string {
+  return videoChain(spec, { inputPad: '0:v', outLabel: 'vout' }).join(';')
 }
 
 /**
@@ -138,38 +164,59 @@ export function loudnormFilter(m: LoudnessMeasurement | null): string {
   return `${base}:measured_I=${m.inputI}:measured_TP=${m.inputTp}:measured_LRA=${m.inputLra}:measured_thresh=${m.inputThresh}:offset=${m.targetOffset}:linear=true`
 }
 
-/** The audio part of the filter graph, ending in [aout], plus extra inputs. */
-export function audioFilter(spec: RenderSpec): { inputs: string[][]; filter: string | null } {
+export interface AudioChainOptions {
+  /** Index of the `-i` input the original audio is read from. */
+  mainInput: number
+  /** Index the first extra input (voice stem) gets; game and music follow it. */
+  firstExtraInput: number
+  /** Goes in front of every internal pad name, so several clips fit in one graph. */
+  prefix?: string
+  /** Name of the finished pad (without brackets). */
+  outLabel: string
+  /** Extra filters (each starting with a comma) run after the loudness step, before the finished pad. */
+  tail?: string
+}
+
+/** One clip's audio chain: the filter (null for a silent clip) and the extra `-i` inputs it reads, numbered from `firstExtraInput`. */
+export function audioChain(spec: AudioSpec, o: AudioChainOptions): { inputs: string[][]; filter: string | null } {
   const a = spec.audio
   const norm = loudnormFilter(spec.loudness)
   const fmt = 'aresample=48000,aformat=channel_layouts=stereo'
+  const prefix = o.prefix ?? ''
+  const pad = (name: string): string => `[${prefix}${name}]`
+  const out = `${o.tail ?? ''}[${o.outLabel}]`
   if (a.kind === 'silent') return { inputs: [], filter: null }
-  if (a.kind === 'original') return { inputs: [], filter: `[0:a]${fmt},${norm}[aout]` }
+  if (a.kind === 'original') return { inputs: [], filter: `[${o.mainInput}:a]${fmt},${norm}${out}` }
 
   const inputs: string[][] = [['-i', a.voice]]
-  const parts: string[] = [`[1:a]${fmt}[voice]`]
-  const mix = ['[voice]']
-  let next = 2
+  const parts: string[] = [`[${o.firstExtraInput}:a]${fmt}${pad('voice')}`]
+  const mix = [pad('voice')]
+  let next = o.firstExtraInput + 1
   if (a.game) {
     inputs.push(['-i', a.game])
-    parts.push(`[${next}:a]${fmt},volume=${a.gameGain.toFixed(3)}[game]`)
-    mix.push('[game]')
+    parts.push(`[${next}:a]${fmt},volume=${a.gameGain.toFixed(3)}${pad('game')}`)
+    mix.push(pad('game'))
     next++
   }
   if (a.music) {
     inputs.push(['-stream_loop', '-1', '-i', a.music])
     const fadeOut = Math.max(0, spec.duration - 1.5).toFixed(2)
     parts.push(
-      `[${next}:a]${fmt},atrim=0:${spec.duration.toFixed(3)},volume=${a.musicGain.toFixed(3)},afade=t=in:d=1,afade=t=out:st=${fadeOut}:d=1.5[musicraw]`
+      `[${next}:a]${fmt},atrim=0:${spec.duration.toFixed(3)},volume=${a.musicGain.toFixed(3)},afade=t=in:d=1,afade=t=out:st=${fadeOut}:d=1.5${pad('musicraw')}`
     )
     // Duck the music under the voice.
-    parts[0] = `[1:a]${fmt},asplit=2[voice][voicekey]`
-    parts.push('[musicraw][voicekey]sidechaincompress=threshold=0.04:ratio=6:attack=20:release=400[music]')
-    mix.push('[music]')
+    parts[0] = `[${o.firstExtraInput}:a]${fmt},asplit=2${pad('voice')}${pad('voicekey')}`
+    parts.push(`${pad('musicraw')}${pad('voicekey')}sidechaincompress=threshold=0.04:ratio=6:attack=20:release=400${pad('music')}`)
+    mix.push(pad('music'))
   }
-  if (mix.length === 1) parts.push(`[voice]${norm}[aout]`)
-  else parts.push(`${mix.join('')}amix=inputs=${mix.length}:duration=first:normalize=0,${norm}[aout]`)
+  if (mix.length === 1) parts.push(`${pad('voice')}${norm}${out}`)
+  else parts.push(`${mix.join('')}amix=inputs=${mix.length}:duration=first:normalize=0,${norm}${out}`)
   return { inputs, filter: parts.join(';') }
+}
+
+/** The audio part of the filter graph, ending in [aout], plus extra inputs. */
+export function audioFilter(spec: RenderSpec): { inputs: string[][]; filter: string | null } {
+  return audioChain(spec, { mainInput: 0, firstExtraInput: 1, outLabel: 'aout' })
 }
 
 /** Encoder settings tuned for 1080p social uploads. */
