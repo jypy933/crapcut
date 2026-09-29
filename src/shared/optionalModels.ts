@@ -10,7 +10,7 @@ import type { ComponentState, HardwareProfile, SetupComponent } from './types'
 export type OptionalModelId = 'llm' | 'voiceSeparation'
 
 /** Artifact ids used by an optional part. A subset of main/tools/manifest.ts's ToolId. */
-export type OptionalArtifactId = 'llama' | 'model-llm-8b' | 'model-llm-3b' | 'separator' | 'model-demucs'
+export type OptionalArtifactId = 'llama' | 'model-llm-9b' | 'model-llm-3b' | 'separator' | 'model-demucs'
 
 export interface OptionalModel {
   id: OptionalModelId
@@ -35,7 +35,7 @@ const PARTS: readonly Part[] = [
     id: 'llm',
     label: 'Smart picks and titles',
     description: 'A small local language model that sharpens which moments become clips and writes their titles. Without it, CrapCut still finds clips from chat and audio alone.',
-    artifactIds: (hw) => ['llama', canRunBigLlm(hw) ? 'model-llm-8b' : 'model-llm-3b']
+    artifactIds: (hw) => ['llama', canRunBigLlm(hw) ? 'model-llm-9b' : 'model-llm-3b']
   },
   {
     id: 'voiceSeparation',
@@ -72,7 +72,7 @@ export function buildOptionalModels(hw: HardwareProfile, components: readonly Se
     const comps = ids.map((id) => byId.get(id)).filter((c): c is SetupComponent => !!c)
     const sizeBytes = comps.reduce((s, c) => s + c.sizeBytes, 0)
     const progress = sizeBytes ? comps.reduce((s, c) => s + c.sizeBytes * (c.state === 'ready' ? 1 : c.progress), 0) / sizeBytes : 0
-    const llmModel = comps.find((c) => c.id === 'model-llm-8b' || c.id === 'model-llm-3b')
+    const llmModel = comps.find((c) => c.id === 'model-llm-9b' || c.id === 'model-llm-3b')
     return {
       id: part.id,
       label: part.label,

@@ -32,7 +32,7 @@ const modelComponents: SetupComponent[] = [
   { id: 'model-whisper-large', label: 'Speech model (Whisper large-v3-turbo)', sizeBytes: 874188075, state: 'missing', progress: 0, optional: false },
   // Optional AI parts, offered again later from the About screen.
   { id: 'llama', label: 'llama.cpp', sizeBytes: 33064176, state: 'ready', progress: 1, optional: true },
-  { id: 'model-llm-8b', label: 'Language model (Ministral 3 8B)', sizeBytes: 5198911904, state: 'missing', progress: 0, optional: true },
+  { id: 'model-llm-9b', label: 'Language model (Qwen3.5 9B)', sizeBytes: 5680522464, state: 'missing', progress: 0, optional: true },
   { id: 'separator', label: 'Voice separator (demucs.cpp)', sizeBytes: 2102181, state: 'missing', progress: 0, optional: true },
   { id: 'model-demucs', label: 'Voice separation model (Demucs htdemucs)', sizeBytes: 83994361, state: 'missing', progress: 0, optional: true }
 ]
