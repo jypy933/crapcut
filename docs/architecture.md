@@ -59,11 +59,26 @@ is already on disk and carries on.
    from a base score, keeping one very loud, unconfirmed moment from
    burying several real chat reactions.
 4. Stream start/end and Twitch-muted parts are skipped.
-5. The local LLM gets each candidate's transcript excerpt and chat summary and
+5. `core/transcriptQuality.ts` flags stretches of the transcript that are not
+   real speech: whisper looping on the same word or phrase ("Tired Tired
+   Tired", a sentence repeated for a minute over music or game noise), known
+   filler lines it hallucinates over silence (subtitle credits, "thank you"),
+   rambling low-variety text and timings that cannot be spoken (words crammed
+   into near nothing, one word stretched over many seconds). A candidate whose
+   window is mostly one of these, or has essentially no real speech, is
+   dropped before it reaches the language model -- unless chat or loudness
+   alone are strong enough that something real clearly happened, in which case
+   it is kept but marked so its title comes from the reaction, not the fake
+   transcript. `@shared/transcriptLoops.ts` collapses a loop down to a single
+   occurrence (short natural repeats like "no no no no" are left alone); the
+   caption word path (`shared/captions.ts`'s `clipWords`) and the no-LLM
+   fallback title both use the collapsed words, so a kept clip never shows or
+   is titled from "of of of".
+6. The local LLM gets each candidate's transcript excerpt and chat summary and
    returns JSON (keep, rating, start, end, title), constrained by a JSON schema
    and validated again. Without the LLM, cut points snap to pauses in speech
    and titles come from the transcript.
-6. The number of clips is not a fixed target: chat- and transcript-backed
+7. The number of clips is not a fixed target: chat- and transcript-backed
    candidates are kept as found, and loud-only candidates need to clearly
    stand out from this stream's *other* loud moments (not just clear the
    initial detection threshold), so a stream full of merely-loud, mediocre
