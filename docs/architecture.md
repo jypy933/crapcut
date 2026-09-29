@@ -30,6 +30,11 @@ A job is one VOD. Each step writes its result to the job folder
 in SQLite. On restart, interrupted jobs show **Continue**; each step checks what
 is already on disk and carries on.
 
+Steps run in order, with one exception: the chat download only needs the VOD
+id and nothing reads the chat before `moments`, so the runner starts it beside
+`audio` and `transcribe` and waits for it before `moments`. A failure on
+either side stops the other. Clip videos download three at a time.
+
 | Step | Tool | Output |
 | --- | --- | --- |
 | metadata | yt-dlp `-J`, audio playlist | `meta.json` (title, length, chapters, muted ranges) |
