@@ -1,8 +1,9 @@
 // Builds the FFmpeg filter_complex for one clip's EDL re-edit: reordered and
-// trimmed segments joined as jump cuts, a punch-in zoom and shake done with
-// `crop` (not `zoompan`), freeze frames, per-segment speed, overlays burned
-// in with `ass` (not `drawtext`, which segfaults under some fontconfig
-// setups), an SFX mix, and the export's existing loudness normalisation.
+// trimmed segments joined as jump cuts, a punch-in zoom and shake done with a
+// per-frame `scale` + `overlay` (not `crop`, whose w/h are fixed at init, and
+// not `zoompan`), freeze frames, per-segment speed, overlays burned in with
+// `ass` (not `drawtext`, which segfaults under some fontconfig setups), an SFX
+// mix, and the export's existing loudness normalisation.
 // Pure: no I/O, no processes. The graph is long, so the caller passes it
 // through `-filter_complex_script` (a file) instead of `-filter_complex`, to
 // stay clear of shell/argv quoting entirely.
@@ -78,29 +79,38 @@ export function shakeAmpExpr(zoom: readonly ZoomKeyframe[]): string {
   return expr
 }
 
-/** The `crop` filter's w/h/x/y expressions for a punch-in zoom + shake on a `size` frame. Unescaped. */
-export function zoomCropExpr(zoom: readonly ZoomKeyframe[], size: Size): { w: string; h: string; x: string; y: string } {
+/**
+ * The `scale` (w/h, evaluated per frame) and `overlay` (x/y) expressions for a
+ * punch-in zoom + shake on a `size` frame. Unescaped. `crop` cannot do this:
+ * it evaluates w/h once at init (where `t` is unknown), so a crop sized from
+ * time is a constant crop for the whole clip. The frame is scaled up per frame
+ * (kept even so every chroma plane divides) and overlaid, centred plus shake
+ * and clamped so it always covers the frame, on the unscaled frame.
+ */
+export function zoomExpr(zoom: readonly ZoomKeyframe[], size: Size): { w: string; h: string; x: string; y: string } {
   const scale = zoomScaleExpr(zoom)
   const amp = shakeAmpExpr(zoom)
-  const w = `${size.width}/(${scale})`
-  const h = `${size.height}/(${scale})`
+  const w = `trunc(${size.width}*(${scale})/2)*2`
+  const h = `trunc(${size.height}*(${scale})/2)*2`
   const shakeX = `(${amp})*sin(2*PI*13*t)`
   const shakeY = `(${amp})*cos(2*PI*17*t)`
-  const x = `max(0,min(${size.width}-(${w}),(${size.width}-(${w}))/2+${shakeX}))`
-  const y = `max(0,min(${size.height}-(${h}),(${size.height}-(${h}))/2+${shakeY}))`
+  // W/H = the unscaled frame, w/h = the scaled one (both offsets are <= 0).
+  const x = `max(W-w,min(0,(W-w)/2+${shakeX}))`
+  const y = `max(H-h,min(0,(H-h)/2+${shakeY}))`
   return { w, h, x, y }
 }
 
 /** Escapes commas so an eval expression survives inside a filtergraph option (a bare comma would end the filter early). */
 const escExpr = (s: string): string => s.replace(/,/g, '\\,')
 
-function zoomCropFilter(zoom: readonly ZoomKeyframe[], size: Size): string | null {
-  if (zoom.length === 0) return null
-  const { w, h, x, y } = zoomCropExpr(zoom, size)
-  // crop's x/y/w/h are re-evaluated every frame by default (there is no
-  // `eval` option, unlike `scale`/`overlay`), so this is enough for a
-  // time-varying punch-in with no `zoompan`.
-  return `crop=w=${escExpr(w)}:h=${escExpr(h)}:x=${escExpr(x)}:y=${escExpr(y)},scale=${size.width}:${size.height}:flags=lanczos`
+/** Scales `pad` up per frame and overlays it on itself; returns the new pad, or `pad` when there is no zoom. */
+function spliceZoom(parts: string[], pad: string, zoom: readonly ZoomKeyframe[], size: Size): string {
+  if (zoom.length === 0) return pad
+  const { w, h, x, y } = zoomExpr(zoom, size)
+  parts.push(`[${pad}]split=2[vzmain][vzsrc]`)
+  parts.push(`[vzsrc]scale=w=${escExpr(w)}:h=${escExpr(h)}:eval=frame:flags=bicubic[vzbig]`)
+  parts.push(`[vzmain][vzbig]overlay=x=${escExpr(x)}:y=${escExpr(y)}:eval=frame:format=yuv420[vzoom]`)
+  return 'vzoom'
 }
 
 /** Splits a pad into `n` copies when more than one filter needs to read it; returns it unchanged for n<=1. */
@@ -280,12 +290,7 @@ export function edlVideoFilter(spec: EdlRenderSpec): string {
   parts.push(`[${vfz}]fps=${fps}[vfps]`)
   parts.push(...layoutBaseFilter('vfps', spec.format, spec.layout, spec.source))
 
-  const zoomFilter = zoomCropFilter(spec.edl.zoom, out)
-  let pad = 'base'
-  if (zoomFilter) {
-    parts.push(`[base]${zoomFilter}[vzoom]`)
-    pad = 'vzoom'
-  }
+  let pad = spliceZoom(parts, 'base', spec.edl.zoom, out)
 
   pad = assStage(pad, parts, spec.captionsAssFile, spec.fontsDir, 'vcap')
   pad = assStage(pad, parts, spec.overlayAssFile, spec.fontsDir, 'vovl')

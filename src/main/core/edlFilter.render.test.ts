@@ -57,6 +57,19 @@ async function makeSfxClip(file: string, seconds: number, freq: number): Promise
   await runTool(ffmpeg!, ['-hide_banner', '-y', '-f', 'lavfi', '-i', `sine=frequency=${freq}:sample_rate=48000:duration=${seconds}`, file])
 }
 
+/** Structural similarity (0-1) of two images, via FFmpeg's `ssim` filter. */
+async function ssim(a: string, b: string): Promise<number> {
+  const { stderr } = await runTool(ffmpeg!, ['-hide_banner', '-i', a, '-i', b, '-lavfi', 'ssim', '-f', 'null', '-'])
+  const m = /All:([\d.]+)/.exec(stderr)
+  if (!m) throw new Error('no ssim result')
+  return Number(m[1])
+}
+
+/** One frame of `file` at `t` seconds, optionally run through `vf`, saved as a PNG. */
+async function frameAt(file: string, t: number, out: string, vf?: string): Promise<void> {
+  await runTool(ffmpeg!, ['-hide_banner', '-y', '-ss', String(t), '-i', file, ...(vf ? ['-vf', vf] : []), '-frames:v', '1', out])
+}
+
 const seg = (srcStart: number, srcEnd: number, speed = 1): EdlSegment => ({ srcStart, srcEnd, speed })
 
 const baseEdl = (over: Partial<Edl> = {}): Edl => ({
@@ -145,6 +158,29 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
       expect(out.height).toBe(1080)
       expect(out.duration).toBeGreaterThan(outputDuration(edl) - frame)
       expect(out.duration).toBeLessThan(outputDuration(edl) + frame)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 180_000)
+
+  it('zooms in only from the keyframe on (the crop is not fixed from frame 0)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-zoomcurve-'))
+    try {
+      await makeSourceClip(join(dir, 'in.mp4'), 4)
+      const edl = baseEdl({ segments: [seg(0, 4)], zoom: [{ t: 0, scale: 1, ease: 'snap' }, { t: 1, scale: 2, ease: 'snap' }] })
+      await runEdl(dir, edl)
+
+      // Before the keyframe the picture is the plain source; after it, the
+      // centre half of the source blown up to fill the frame.
+      await frameAt(join(dir, 'out.mp4'), 0.5, join(dir, 'out-before.png'))
+      await frameAt(join(dir, 'out.mp4'), 2.5, join(dir, 'out-after.png'))
+      await frameAt(join(dir, 'in.mp4'), 0.5, join(dir, 'ref-before.png'))
+      await frameAt(join(dir, 'in.mp4'), 2.5, join(dir, 'ref-plain.png'))
+      await frameAt(join(dir, 'in.mp4'), 2.5, join(dir, 'ref-zoomed.png'), 'crop=960:540:480:270,scale=1920:1080:flags=lanczos')
+
+      expect(await ssim(join(dir, 'out-before.png'), join(dir, 'ref-before.png'))).toBeGreaterThan(0.9)
+      expect(await ssim(join(dir, 'out-after.png'), join(dir, 'ref-zoomed.png'))).toBeGreaterThan(0.9)
+      expect(await ssim(join(dir, 'out-after.png'), join(dir, 'ref-plain.png'))).toBeLessThan(0.7)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
