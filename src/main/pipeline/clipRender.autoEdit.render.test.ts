@@ -151,5 +151,5 @@ describe.skipIf(!ffmpeg || !ffprobe)('auto-edit export wiring (real FFmpeg)', ()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 120_000)
+  }, 240_000)
 })

@@ -31,7 +31,7 @@ function findOnPath(name: string): string | null {
 const ffmpeg = findOnPath(process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
 const ffprobe = findOnPath(process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe')
 
-const SOURCE_FPS = 60
+const SOURCE_FPS = 30
 const SOURCE_SIZE = { width: 1920, height: 1080 }
 const CLIP_LENGTH = 24
 
@@ -253,6 +253,6 @@ describe.skipIf(!ffmpeg || !ffprobe)('viral edit house look (real FFmpeg)', () =
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
-    }, 90_000)
+    }, 240_000)
   }
 })

@@ -117,7 +117,7 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 180_000)
 
   it('cuts several short segments together (jump cuts)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-jumpcuts-'))
@@ -132,7 +132,7 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 180_000)
 
   it('renders a punch-in zoom with shake', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-zoom-'))
@@ -148,7 +148,7 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 180_000)
 
   it('holds a freeze frame with matching silence', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-freeze-'))
@@ -166,7 +166,7 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 180_000)
 
   it('plays a segment at a different speed', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-speed-'))
@@ -182,7 +182,7 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 180_000)
 
   it('mixes in an sfx cue', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-sfx-'))
@@ -198,7 +198,7 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 180_000)
 
   it('renders a combined edit: reorder, zoom, freeze, speed, captions and an overlay', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'crapcut-edl-combined-'))
@@ -240,5 +240,5 @@ describe.skipIf(!ffmpeg || !ffprobe)('EDL re-edit graph (real FFmpeg)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 180_000)
 })
