@@ -102,6 +102,8 @@ export class LlamaServer {
   private port = 0
   private readonly key = randomBytes(24).toString('hex')
   private stderr = ''
+  /** Server timings summed over this session's requests, logged once on stop. */
+  private stats = { requests: 0, promptTokens: 0, cachedTokens: 0, promptRate: 0, answerRate: 0 }
 
   constructor(
     private readonly exe: string,
@@ -131,6 +133,10 @@ export class LlamaServer {
       // Answers are short JSON; "thinking" models would waste the token budget.
       '--reasoning-budget',
       '0',
+      // Finished prompts are kept in RAM for reuse; the default allows 8 GB,
+      // too much next to a game on a 16 GB PC, and hundreds of one-off prompts gain little from it.
+      '--cache-ram',
+      '1024',
       '--no-webui'
     ]
     this.child = spawn(this.exe, args, { cwd: this.cwd, shell: false, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
@@ -176,20 +182,40 @@ export class LlamaServer {
         messages,
         temperature: sampling?.temperature ?? 0.2,
         ...(sampling?.seed !== undefined ? { seed: sampling.seed } : {}),
-        max_tokens: 600,
+        // Answers are a few short JSON fields; this only stops a runaway answer early.
+        max_tokens: 300,
         chat_template_kwargs: { enable_thinking: false },
         response_format: { type: 'json_schema', json_schema: { name: 'answer', schema, strict: true } }
       }),
       signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)])
     })
     if (!res.ok) throw new Error(`llama-server HTTP ${res.status}: ${(await res.text()).slice(0, 500)}`)
-    const j = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] }
+    const j = (await res.json()) as {
+      choices?: { message?: { content?: string }; finish_reason?: string }[]
+      timings?: { prompt_n?: number; cache_n?: number; prompt_per_second?: number; predicted_per_second?: number }
+    }
+    const t = j.timings
+    if (t) {
+      this.stats.requests++
+      this.stats.promptTokens += t.prompt_n ?? 0
+      this.stats.cachedTokens += t.cache_n ?? 0
+      this.stats.promptRate += t.prompt_per_second ?? 0
+      this.stats.answerRate += t.predicted_per_second ?? 0
+    }
     const choice = j.choices?.[0]
     if (choice?.finish_reason && choice.finish_reason !== 'stop') log.warn(`model stopped early: ${choice.finish_reason}`)
     return choice?.message?.content ?? ''
   }
 
   stop(): void {
+    const st = this.stats
+    if (st.requests > 0) {
+      log.info(
+        `llm: ${st.requests} requests, ${st.promptTokens} prompt tokens (+${st.cachedTokens} cached), ` +
+          `${Math.round(st.promptRate / st.requests)} t/s prompt, ${Math.round(st.answerRate / st.requests)} t/s answer`
+      )
+      this.stats = { requests: 0, promptTokens: 0, cachedTokens: 0, promptRate: 0, answerRate: 0 }
+    }
     if (this.child?.pid && this.child.exitCode === null) killTree(this.child.pid)
     this.child = null
   }

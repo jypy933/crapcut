@@ -180,6 +180,9 @@ async function chunkDone(file: string): Promise<boolean> {
   }
 }
 
+/** GPU failures after which the rest of the VOD is transcribed on the CPU. */
+const MAX_GPU_FAILURES = 2
+
 async function transcribe(ctx: StepContext): Promise<void> {
   if (transcriptDone(ctx.dir)) return
   const meta = await loadMeta(ctx.dir)
@@ -203,6 +206,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
   const rel = (p: string): string => relative(root, p)
 
   let useGpu = !!cuda
+  let gpuFailures = 0
   if (useGpu) {
     const free = await nvidiaFreeVramMb()
     if (free !== null && free < 2500) {
@@ -223,7 +227,8 @@ async function transcribe(ctx: StepContext): Promise<void> {
       const done = join(outDir, `${name}.json`)
       if (await chunkDone(done)) continue
       const overallBase = i / chunks.length
-      const report = (f: number): void => ctx.progress(overallBase + f / chunks.length, useGpu ? null : 'Using the processor (slower)')
+      let onGpu = useGpu
+      const report = (f: number): void => ctx.progress(overallBase + f / chunks.length, onGpu ? null : 'Using the processor (slower)')
       report(0)
       // Skip chunks that are entirely muted.
       const mutedSec = muted.reduce((s, m) => s + Math.max(0, Math.min(chunk.end, m.end) - Math.max(chunk.start, m.start)), 0)
@@ -234,8 +239,9 @@ async function transcribe(ctx: StepContext): Promise<void> {
       const wav = join(outDir, `${name}.wav`)
       await cutWav(ffmpeg, root, rel(join(ctx.dir, 'audio16k.wav')), chunk.start, chunk.end - chunk.start, rel(wav), ctx.signal)
       const outBase = join(outDir, `${name}.raw`)
-      const run = async (gpu: boolean): Promise<void> =>
-        whisperChunk({
+      const run = async (gpu: boolean): Promise<void> => {
+        onGpu = gpu
+        return whisperChunk({
           whisper: gpu && cuda ? cuda : cpu,
           cwd: root,
           model: rel(modelFor(gpu)),
@@ -249,12 +255,16 @@ async function transcribe(ctx: StepContext): Promise<void> {
           signal: ctx.signal,
           onProgress: report
         })
+      }
       try {
         await run(useGpu)
       } catch (err) {
         if (isCancelled(err) || !useGpu) throw err
-        ctx.log.warn('GPU transcription failed; switching to the CPU', err)
-        useGpu = false
+        // A one-off failure (a game briefly holding the VRAM) should not send
+        // the rest of a long VOD to the much slower CPU; a repeated one does.
+        gpuFailures++
+        ctx.log.warn(`GPU transcription failed (${gpuFailures} of ${MAX_GPU_FAILURES}); this chunk goes to the CPU`, err)
+        if (gpuFailures >= MAX_GPU_FAILURES) useGpu = false
         await run(false)
       }
       const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`))
@@ -539,10 +549,23 @@ async function ask(ctx: StepContext, llm: LlmSession, prompt: string, sample: 0 
   )
 }
 
-/** One sample for the 3B tier, or two independent samples combined (see `combineSamples`) for the Qwen tier. */
-async function askAndParse(ctx: StepContext, llm: LlmSession, prompt: string, excerpt: Excerpt, duration: number): Promise<Refined | null> {
+/**
+ * One sample for the 3B tier, or two independent samples combined (see
+ * `combineSamples`) for the Qwen tier. The second request is skipped when it
+ * cannot change the outcome: an unusable first answer makes the pair null
+ * anyway, and with `rejectIsFinal` (a caller that throws rejected answers
+ * away) a first "no" already decides it, since the pair only keeps when both do.
+ */
+async function askAndParse(
+  ctx: StepContext,
+  llm: LlmSession,
+  prompt: string,
+  excerpt: Excerpt,
+  duration: number,
+  rejectIsFinal = false
+): Promise<Refined | null> {
   const first = parseAnswer(await ask(ctx, llm, prompt, 0), excerpt, duration)
-  if (!llm.twoSample) return first
+  if (!llm.twoSample || !first || (rejectIsFinal && !first.keep)) return first
   const second = parseAnswer(await ask(ctx, llm, prompt, 1), excerpt, duration)
   return combineSamples(first, second)
 }
@@ -613,7 +636,7 @@ async function scanTranscript(
     const chapter = meta.chapters.find((ch) => range.start >= ch.start && range.start < ch.end)?.title ?? null
     try {
       const prompt = buildScanPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, excerpt)
-      const r = await askAndParse(ctx, llm, prompt, excerpt, duration)
+      const r = await askAndParse(ctx, llm, prompt, excerpt, duration, true)
       if (!r || !r.keep || r.rating < TRANSCRIPT_MIN_RATING) continue
       const score = combinedScore(transcriptSignal, r.rating)
       // The scan gives a fixed nominal signal, not a z-score; scoreToStrength
@@ -756,48 +779,93 @@ async function clipsStep(ctx: StepContext): Promise<void> {
   const dir = join(ctx.dir, 'clips')
   mkdirSync(dir, { recursive: true })
 
-  for (let i = 0; i < clips.length; i++) {
-    throwIfAborted(ctx.signal)
+  // A section download is one slow ffmpeg connection plus yt-dlp's own
+  // start-up, so a few at once finish much sooner. Kept small so Twitch
+  // does not start refusing requests.
+  const fractions: number[] = clips.map((c) => (c.source && existsSync(join(dir, `${c.id}.mp4`)) ? 1 : 0))
+  let finished = fractions.filter((f) => f === 1).length
+  const report = (i: number, f: number): void => {
+    fractions[i] = f
+    ctx.progress(fractions.reduce((a, b) => a + b, 0) / Math.max(1, clips.length), `Clip ${Math.min(clips.length, finished + 1)} of ${clips.length}`)
+  }
+  const failed = new AbortController()
+  const signal = AbortSignal.any([ctx.signal, failed.signal])
+  const one = async (i: number): Promise<void> => {
     const clip = clips[i]!
     const file = join(dir, `${clip.id}.mp4`)
-    if (clip.source && existsSync(file)) continue
-    const report = (f: number): void => ctx.progress((i + f) / clips.length, `Clip ${i + 1} of ${clips.length}`)
-    report(0)
+    if (clip.source && existsSync(file)) return
+    report(i, 0)
     const want = { start: Math.max(0, clip.start - CLIP_PAD_SEC), end: Math.min(meta.vod.durationSec, clip.end + CLIP_PAD_SEC) }
     rmSync(file, { force: true })
-    await downloadSection(ytdlp, ffmpeg, ctx.job.url, want.start, want.end, join(dir, `${clip.id}.%(ext)s`), ctx.signal, (f) => report(f * 0.9))
+    await downloadSection(ytdlp, ffmpeg, ctx.job.url, want.start, want.end, join(dir, `${clip.id}.%(ext)s`), signal, (f) => report(i, f * 0.9))
     if (!existsSync(file)) {
       const other = readdirSync(dir).find((f) => f.startsWith(clip.id) && !f.endsWith('.part'))
       if (!other) throw new UserError('A clip download did not produce a file. Try again.')
       renameSync(join(dir, other), file)
     }
-    const info = await probeMedia(ffprobe, file, ctx.signal)
+    const info = await probeMedia(ffprobe, file, signal)
     let start = want.start
     if (fullAudio && info.hasAudio) {
-      start = await alignClip(ffmpeg, fullAudio, file, want.start, info.duration, ctx.signal).catch((err) => {
+      start = await alignClip(ffmpeg, fullAudio, file, want.start, info.duration, signal, ctx.log).catch((err) => {
         if (isCancelled(err)) throw err
         ctx.log.warn('alignment failed; using the requested start', err)
         return want.start
       })
     }
     const source = { start: Math.round(start * 1000) / 1000, end: Math.round((start + info.duration) * 1000) / 1000 }
+    // Each download saves only its own clip, read fresh from the list above;
+    // no other step writes clips while this one runs.
     ctx.store.saveClip({ ...clip, source, start: Math.max(clip.start, source.start), end: Math.min(clip.end, source.end) })
-    report(1)
+    finished++
+    report(i, 1)
   }
+  let next = 0
+  let firstError: unknown = null
+  const worker = async (): Promise<void> => {
+    while (next < clips.length && !signal.aborted) {
+      const i = next++
+      try {
+        await one(i)
+      } catch (err) {
+        // Stop the other downloads too; the step's retry picks up what is left.
+        if (firstError === null) firstError = err
+        failed.abort()
+        return
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CLIP_DOWNLOADS_AT_ONCE, clips.length) }, worker))
+  throwIfAborted(ctx.signal)
+  if (firstError !== null) throw firstError
 }
 
+/** How many clip videos download at the same time. */
+const CLIP_DOWNLOADS_AT_ONCE = 3
+
 /** Where the clip file really starts in VOD time, matched on audio. */
-export async function alignClip(ffmpeg: string, fullAudio: string, clipFile: string, expected: number, clipDuration: number, signal: AbortSignal): Promise<number> {
+export async function alignClip(
+  ffmpeg: string,
+  fullAudio: string,
+  clipFile: string,
+  expected: number,
+  clipDuration: number,
+  signal: AbortSignal,
+  log?: { info: (...p: unknown[]) => void }
+): Promise<number> {
   const probeLen = Math.min(20, clipDuration)
-  const search = 8
+  // A copied HLS section starts on the segment boundary at or before the
+  // requested time, and Twitch segments are up to about 10 s long.
+  const search = 14
   const refStart = Math.max(0, expected - search)
   const [ref, probe] = await Promise.all([
     extractPcm(ffmpeg, fullAudio, refStart, probeLen + 2 * search, signal),
     extractPcm(ffmpeg, clipFile, 0, probeLen, signal)
   ])
   const { lag, score } = bestLag(envelope(pcm16ToFloat(ref), 8000), envelope(pcm16ToFloat(probe), 8000))
+  const found = refStart + lag * 0.01
+  log?.info(`aligned at ${(found - expected).toFixed(2)} s from the request (match ${score.toFixed(2)})`)
   if (score < 0.6) return expected
-  return refStart + lag * 0.01
+  return found
 }
 
 // ---------------------------------------------------------------- registry
