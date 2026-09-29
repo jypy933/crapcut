@@ -25,7 +25,20 @@ describe('acceleratorsToFetch', () => {
     expect(acceleratorsToFetch({ ...amd, whisper: 'cpu' }, () => false)).toEqual([])
   })
 
+  it('fetches the CUDA language-model build on NVIDIA only when the language model is installed', () => {
+    const rtx: HardwareProfile = {
+      ...amd,
+      gpus: [{ vendor: 'nvidia', name: 'RTX 3080', vramMb: 10240 }],
+      primary: { vendor: 'nvidia', name: 'RTX 3080', vramMb: 10240 },
+      whisper: 'cuda',
+      llmCuda: true
+    }
+    expect(acceleratorsToFetch(rtx, (id) => id === 'llama')).toEqual(['llama-cuda', 'llama-cuda-runtime'])
+    expect(acceleratorsToFetch(rtx, () => false)).toEqual([])
+    expect(acceleratorsToFetch({ ...rtx, llmCuda: false }, (id) => id === 'llama')).toEqual([])
+  })
+
   it('never blocks setup: every accelerator is optional', () => {
-    expect(artifact('whisper-vulkan').optional).toBe(true)
+    for (const id of ['whisper-vulkan', 'llama-cuda', 'llama-cuda-runtime'] as const) expect(artifact(id).optional).toBe(true)
   })
 })

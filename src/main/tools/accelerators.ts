@@ -13,7 +13,12 @@ interface Accelerator {
   requires?: ToolId
 }
 
-const ACCELERATORS: readonly Accelerator[] = [{ id: 'whisper-vulkan' }]
+const ACCELERATORS: readonly Accelerator[] = [
+  { id: 'whisper-vulkan' },
+  // The language model is optional: only a PC that installed it gets its CUDA build.
+  { id: 'llama-cuda', requires: 'llama' },
+  { id: 'llama-cuda-runtime', requires: 'llama' }
+]
 
 /** Accelerators this PC needs but does not have yet. */
 export function acceleratorsToFetch(hw: HardwareProfile, isInstalled: (id: ToolId) => boolean): ToolId[] {
