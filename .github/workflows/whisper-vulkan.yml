@@ -1,0 +1,133 @@
+name: Build whisper.cpp with Vulkan
+
+# whisper.cpp publishes no Windows Vulkan build, so this builds the exact
+# release the app pins (v1.9.4, tag b5130) with the Vulkan backend, using the
+# same flags as upstream's own Windows release job plus GGML_VULKAN. The zip
+# mirrors the official ones (a Release/ folder), so the app treats it like the
+# CPU and CUDA builds (see src/main/tools/manifest.ts); copy the SHA-256 and
+# size from the job summary.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag for the asset
+        required: true
+        default: tools-whisper-vulkan-1
+
+permissions:
+  contents: read
+
+env:
+  # ggml-org/whisper.cpp tag v1.9.4 (release b5130)
+  WHISPER_CPP_COMMIT: 927cfce34f31707e17f2bff35c349632fb9e2c3a
+  # LunarG's published SHA-256 for this installer
+  VULKAN_VERSION: 1.4.357.0
+  VULKAN_SDK_SHA256: 81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d
+  # ggml-tiny-q8_0.bin at the same Hugging Face revision the app pins for its models
+  SMOKE_MODEL_URL: https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny-q8_0.bin
+  SMOKE_MODEL_SHA256: c2085835d3f50733e2ff6e4b41ae8a2b8d8110461e18821b09a15c40c42d1cca
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Get whisper.cpp (pinned)
+        shell: pwsh
+        run: |
+          git clone https://github.com/ggml-org/whisper.cpp "$env:RUNNER_TEMP\whisper.cpp"
+          git -C "$env:RUNNER_TEMP\whisper.cpp" checkout $env:WHISPER_CPP_COMMIT
+          $head = git -C "$env:RUNNER_TEMP\whisper.cpp" rev-parse HEAD
+          if ($head -ne $env:WHISPER_CPP_COMMIT) { throw "Unexpected whisper.cpp commit $head" }
+
+      - name: Install Vulkan SDK (pinned, checksum verified)
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'VulkanSDK-Installer.exe'
+          curl.exe -fsSL -o $installer "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          $actual = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLower()
+          if ($actual -ne $env:VULKAN_SDK_SHA256) { throw "Vulkan SDK checksum mismatch: $actual" }
+          & $installer --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+
+      - name: Build (Vulkan backend, all CPU variants)
+        shell: pwsh
+        run: |
+          $src = "$env:RUNNER_TEMP\whisper.cpp"
+          cmake -S $src -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=ON `
+            -DWHISPER_SDL2=OFF `
+            -DWHISPER_BUILD_TESTS=OFF `
+            -DGGML_NATIVE=OFF `
+            -DGGML_BACKEND_DL=ON `
+            -DGGML_CPU_ALL_VARIANTS=ON `
+            -DGGML_VULKAN=ON
+          if ($LASTEXITCODE -ne 0) { throw 'cmake configure failed' }
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw 'cmake build failed' }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $bin = 'build/bin/Release'
+          Get-ChildItem $bin | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          New-Item -ItemType Directory -Force dist/Release | Out-Null
+          Copy-Item "$bin/whisper-cli.exe", "$bin/whisper.dll" dist/Release/
+          Copy-Item "$bin/ggml*.dll" dist/Release/
+          Copy-Item "$env:RUNNER_TEMP\whisper.cpp\LICENSE" dist/Release/LICENSE
+          foreach ($need in 'whisper-cli.exe', 'whisper.dll', 'ggml.dll', 'ggml-base.dll', 'ggml-vulkan.dll') {
+            if (-not (Test-Path "dist/Release/$need")) { throw "missing $need in the build output" }
+          }
+          if (-not (Get-ChildItem dist/Release -Filter 'ggml-cpu*.dll')) { throw 'no CPU backend in the build output' }
+          Compress-Archive -Path dist/Release -DestinationPath dist/whisper-vulkan-bin-x64.zip
+
+      - name: Install FFmpeg (pinned, checksum verified)
+        shell: pwsh
+        run: ./scripts/ci/install-ffmpeg.ps1
+
+      - name: Smoke test (tiny model on the CPU)
+        shell: pwsh
+        run: |
+          Expand-Archive dist/whisper-vulkan-bin-x64.zip -DestinationPath smoke
+          $exe = 'smoke/Release/whisper-cli.exe'
+          & $exe --help | Select-Object -First 3
+          $model = Join-Path $env:RUNNER_TEMP 'ggml-tiny-q8_0.bin'
+          curl.exe -fsSL -o $model $env:SMOKE_MODEL_URL
+          $actual = (Get-FileHash -Algorithm SHA256 $model).Hash.ToLower()
+          if ($actual -ne $env:SMOKE_MODEL_SHA256) { throw "Smoke model checksum mismatch: $actual" }
+          ffmpeg -v error -f lavfi -i "sine=frequency=220:duration=4:sample_rate=16000" -ac 1 test.wav
+          # The runner has no GPU: this proves the executable starts, loads its
+          # backends and runs a full pass on the CPU variants.
+          & $exe -m $model -f test.wav -ng -np -t 2
+          if ($LASTEXITCODE -ne 0) { throw 'whisper-cli failed on the CPU smoke test' }
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem dist/*.zip | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_).Hash.ToLower())  $($_.Name)  $($_.Length)" }
+          $lines | Set-Content dist/SHA256SUMS.txt
+          $files = (Get-ChildItem dist/Release | ForEach-Object { $_.Name }) -join "`n"
+          "### whisper.cpp Vulkan asset`n``````" + "`n" + ($lines -join "`n") + "`n" + "`nContents:`n" + $files + "`n``````" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          $lines
+
+      - name: Publish prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          if ($env:TAG -notmatch '^tools-[a-z0-9.-]+$') { throw "Tag must look like tools-whisper-vulkan-2" }
+          gh release create $env:TAG dist/whisper-vulkan-bin-x64.zip dist/SHA256SUMS.txt `
+            --repo $env:REPO --prerelease --target $env:SHA `
+            --title "whisper.cpp Vulkan build ($env:TAG)" `
+            --notes "Built by CI from ggml-org/whisper.cpp $env:WHISPER_CPP_COMMIT (v1.9.4, MIT) with the Vulkan backend. Not an app release."
