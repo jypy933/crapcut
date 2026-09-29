@@ -23,7 +23,9 @@ const clip: Clip = {
   layoutId: null,
   formats: { vertical: true, horizontal: false },
   reason: 'Chat spike',
-  signals: { chatZ: 3, audioZ: 0.5, score: 0.6, rating: null, source: 'chat' }
+  signals: { chatZ: 3, audioZ: 0.5, score: 0.6, rating: null, source: 'chat' },
+  structureDecision: null,
+  autoEdit: true
 }
 
 const apply = (patch: object): Clip => applyClipPatch(clip, ClipPatchSchema.parse(patch), (id) => id === 'layout-1', 5000)
@@ -55,6 +57,17 @@ describe('applyClipPatch', () => {
       { t0: 0, t1: 0.5, text: 'a' },
       { t0: 1, t1: 2, text: 'b' }
     ])
+  })
+
+  it('toggles the automatic edit', () => {
+    expect(apply({ autoEdit: false }).autoEdit).toBe(false)
+  })
+
+  it('recomputes the structure decision on a trim, without touching it otherwise', () => {
+    expect(apply({ title: 'Renamed' }).structureDecision).toBe(clip.structureDecision)
+    const trimmed = apply({ start: 105 })
+    expect(trimmed.structureDecision).not.toBeNull()
+    expect(trimmed.structureDecision).not.toBe(clip.structureDecision)
   })
 
   it('rejects fields the UI may not set', () => {

@@ -3,6 +3,7 @@
 
 import type { ClipPatch } from '@shared/ipc'
 import type { Clip, Word } from '@shared/types'
+import { decideStructureHeuristically } from './core/clipFacts'
 
 export const EDIT_MIN_SEC = 3
 export const EDIT_MAX_SEC = 180
@@ -17,6 +18,7 @@ export function applyClipPatch(clip: Clip, patch: ClipPatch, layoutExists: (id: 
   if (patch.formats !== undefined) next.formats = { ...patch.formats }
   if (patch.layoutId !== undefined) next.layoutId = patch.layoutId === null || layoutExists(patch.layoutId) ? patch.layoutId : clip.layoutId
   if (patch.words !== undefined) next.words = cleanWords(patch.words)
+  if (patch.autoEdit !== undefined) next.autoEdit = patch.autoEdit
 
   if (patch.start !== undefined || patch.end !== undefined) {
     const bounds = clip.source ?? { start: 0, end: vodDuration }
@@ -31,6 +33,11 @@ export function applyClipPatch(clip: Clip, patch: ClipPatch, layoutExists: (id: 
     }
     next.start = round3(start)
     next.end = round3(end)
+    // A trim changes the clip's shape, so the automatic edit's structure is
+    // worth reconsidering -- heuristically, no language model call for every
+    // drag of the trim handles. Previous text picks (a quote span, chat
+    // messages) are kept only if they still land inside the new cut.
+    if (next.start !== clip.start || next.end !== clip.end) next.structureDecision = decideStructureHeuristically(next, null, 0, clip.structureDecision)
   }
   return next
 }

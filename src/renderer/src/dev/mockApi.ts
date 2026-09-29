@@ -181,7 +181,9 @@ let clips: Clip[] = titles.map((title, i) => {
     layoutId: null,
     formats: { vertical: true, horizontal: false },
     reason: i % 2 ? 'Chat spike · laughter' : 'Chat spike · hype · loud',
-    signals: { chatZ: 3.2, audioZ: 1.1, score: 0.7, rating: 7, source: i % 2 ? 'chat' : 'audio' }
+    signals: { chatZ: 3.2, audioZ: 1.1, score: 0.7, rating: 7, source: i % 2 ? 'chat' : 'audio' },
+    structureDecision: null,
+    autoEdit: true
   }
 })
 // Dev-only regression fixture for the Timeline trim bar: word marks whose
@@ -214,7 +216,9 @@ clips.push({
   layoutId: null,
   formats: { vertical: true, horizontal: false },
   reason: 'Dev fixture',
-  signals: { chatZ: 0, audioZ: 0, score: 0.5, rating: null, source: 'audio' }
+  signals: { chatZ: 0, audioZ: 0, score: 0.5, rating: null, source: 'audio' },
+  structureDecision: null,
+  autoEdit: true
 })
 let layouts: Layout[] = []
 let exports: ExportItem[] = []
@@ -251,6 +255,11 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
   },
   'clips:reset': (id: string) => clips.find((c) => c.id === id),
   'clips:pickMusic': () => null,
+  'clips:previewAutoEdit': (clipId: string) => {
+    const state = { clipId, status: 'building' as const, version: null }
+    setTimeout(() => emit('autoEditPreview:changed', { clipId, status: 'ready', version: 'preview' }), 900)
+    return state
+  },
   'layouts:list': () => ({ layouts, defaultId: layouts[0]?.id ?? null }),
   'layouts:save': (l: Layout) => {
     layouts = [l, ...layouts.filter((x) => x.id !== l.id)]
@@ -319,7 +328,8 @@ export function installMockApi(sampleVideo: string): void {
       listeners.get(event)!.add(l)
       return () => listeners.get(event)!.delete(l)
     }) as CrapcutApi['on'],
-    clipUrl: () => sampleVideo
+    clipUrl: () => sampleVideo,
+    previewUrl: () => sampleVideo
   }
   ;(window as { crapcut?: CrapcutApi }).crapcut = api
 }

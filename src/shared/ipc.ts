@@ -2,7 +2,7 @@
 // Every request is validated with these schemas in main before it is used.
 
 import { z } from 'zod'
-import type { AppInfo, AutostartStatus, BestOfItem, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
+import type { AppInfo, AutoEditPreviewState, AutostartStatus, BestOfItem, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
 import { AUDIO_MODES } from './types'
 import { CAPTION_STYLE_IDS } from './captionStyles'
 import { EVENT_CHANNELS, type INVOKE_CHANNELS } from './channels'
@@ -41,7 +41,8 @@ export const ClipPatchSchema = z
     chatOverlay: z.boolean(),
     audio: z.enum(AUDIO_MODES),
     layoutId: id.nullable(),
-    formats: z.object({ vertical: z.boolean(), horizontal: z.boolean() }).strict()
+    formats: z.object({ vertical: z.boolean(), horizontal: z.boolean() }).strict(),
+    autoEdit: z.boolean()
   })
   .partial()
   .strict()
@@ -73,6 +74,7 @@ export const Invoke = {
   'clips:update': z.tuple([id, ClipPatchSchema]),
   'clips:reset': z.tuple([id]),
   'clips:pickMusic': z.tuple([id]),
+  'clips:previewAutoEdit': z.tuple([id, z.enum(['vertical', 'horizontal'])]),
   'layouts:list': z.tuple([]),
   'layouts:save': z.tuple([LayoutSchema]),
   'layouts:delete': z.tuple([id]),
@@ -124,6 +126,7 @@ export interface InvokeResult {
   'clips:update': Clip
   'clips:reset': Clip
   'clips:pickMusic': Clip | null
+  'clips:previewAutoEdit': AutoEditPreviewState
   'layouts:list': { layouts: Layout[]; defaultId: string | null }
   'layouts:save': Layout
   'layouts:delete': void
@@ -157,6 +160,7 @@ export interface Events {
   'channelWatch:changed': ChannelWatchStatus
   /** A notification for a ready job was clicked; bring it into view. */
   'jobs:focus': { jobId: string }
+  'autoEditPreview:changed': AutoEditPreviewState
 }
 
 export type EventChannel = keyof Events
@@ -170,4 +174,6 @@ export interface CrapcutApi {
   on<E extends EventChannel>(event: E, listener: (payload: Events[E]) => void): () => void
   /** URL for playing a clip's downloaded video in the review screen. */
   clipUrl(jobId: string, clipId: string): string
+  /** URL for playing a clip's cached automatic-edit preview, once one is ready. */
+  previewUrl(jobId: string, clipId: string, version: string): string
 }
