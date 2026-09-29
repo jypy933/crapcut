@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { runTool, killTree, ToolFailedError } from '../tools/process'
+import { LLM_SLOT_CTX } from '../core/llmBackend'
 import { CancelledError, UserError } from '../util/errors'
 import { logger } from '../util/log'
 
@@ -96,6 +97,16 @@ export interface ChatMessageIn {
   content: string
 }
 
+export interface LlamaServerOptions {
+  exe: string
+  cwd: string
+  /** Relative to `cwd`. */
+  model: string
+  gpu: boolean
+  /** Requests served at once; defaults to 1. */
+  slots?: number
+}
+
 /** A llama-server process that lives for one pipeline step. */
 export class LlamaServer {
   private child: ChildProcess | null = null
@@ -105,30 +116,27 @@ export class LlamaServer {
   /** Server timings summed over this session's requests, logged once on stop. */
   private stats = { requests: 0, promptTokens: 0, cachedTokens: 0, promptRate: 0, answerRate: 0 }
 
-  constructor(
-    private readonly exe: string,
-    private readonly cwd: string,
-    private readonly model: string,
-    private readonly gpu: boolean
-  ) {}
+  constructor(private readonly o: LlamaServerOptions) {}
 
-  async start(signal: AbortSignal): Promise<void> {
-    this.port = await freePort()
-    const args = [
+  /** The arguments llama-server is started with (exposed for tests). */
+  args(): string[] {
+    const slots = Math.max(1, this.o.slots ?? 1)
+    return [
       '-m',
-      this.model,
+      this.o.model,
       '--host',
       '127.0.0.1',
       '--port',
       String(this.port),
       '--api-key',
       this.key,
+      // The context is split between the slots: each request gets LLM_SLOT_CTX tokens.
       '-c',
-      '8192',
+      String(LLM_SLOT_CTX * slots),
       '-np',
-      '1',
+      String(slots),
       '-ngl',
-      this.gpu ? '999' : '0',
+      this.o.gpu ? '999' : '0',
       '--jinja',
       // Answers are short JSON; "thinking" models would waste the token budget.
       '--reasoning-budget',
@@ -139,7 +147,12 @@ export class LlamaServer {
       '1024',
       '--no-webui'
     ]
-    this.child = spawn(this.exe, args, { cwd: this.cwd, shell: false, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
+  }
+
+  async start(signal: AbortSignal): Promise<void> {
+    this.port = await freePort()
+    const args = this.args()
+    this.child = spawn(this.o.exe, args, { cwd: this.o.cwd, shell: false, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
     this.child.stderr?.setEncoding('utf8')
     this.child.stderr?.on('data', (d: string) => (this.stderr = (this.stderr + d).slice(-8000)))
     const exited = new Promise<never>((_, reject) => {
@@ -156,7 +169,7 @@ export class LlamaServer {
       try {
         const res = await Promise.race([fetch(`http://127.0.0.1:${this.port}/health`, { signal: AbortSignal.timeout(2000) }), exited])
         if (res.ok) {
-          log.info(`llama-server ready on ${this.port} (gpu=${this.gpu})`)
+          log.info(`llama-server ready on ${this.port} (gpu=${this.o.gpu}, slots=${this.o.slots ?? 1})`)
           return
         }
       } catch (err) {

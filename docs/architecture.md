@@ -89,7 +89,12 @@ either side stops the other. Clip videos download three at a time.
    (`core/llmPrompt.ts`): the model is a hybrid one whose state cannot be
    rewound to an arbitrary token, but llama-server keeps a checkpoint at the
    start of the last user message, so the next request skips the shared part
-   (about half of a refine prompt).
+   (about half of a refine prompt). The bigger model on a GPU serves three
+   requests at once (`-np 3`, 4096 tokens of context per slot, about 1.5x
+   faster than one at a time for +0.2 GB VRAM); the 3B tier and the CPU serve
+   one. `core/pool.ts` feeds the slots: results keep input order, three
+   failures stop new requests but keep the finished answers, a cancel rejects
+   at once.
 7. The number of clips is not a fixed target: chat- and transcript-backed
    candidates are kept as found, and loud-only candidates need to clearly
    stand out from this stream's *other* loud moments (not just clear the

@@ -34,6 +34,8 @@ import {
   type Refined
 } from '../core/llmPrompt'
 import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
+import { llmSlots } from '../core/llmBackend'
+import { runPool } from '../core/pool'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
 import { fallbackTitle, findCandidates, maxClipCount, MIN_CLIPS, scoreToStrength, selectByQuality, type Candidate } from '../core/moments'
 import { pickStructure } from '../core/structurePick'
@@ -46,7 +48,7 @@ import type { AppPaths } from '../paths'
 import type { Store } from '../store'
 import { nvidiaFreeVramMb } from '../tools/gpu'
 import type { ToolRegistry } from '../tools/registry'
-import { CancelledError, UserError, isCancelled, throwIfAborted } from '../util/errors'
+import { UserError, isCancelled, throwIfAborted } from '../util/errors'
 import type { Logger } from '../util/log'
 import { downloadChat, LlamaServer, whisperChunk } from './ai'
 import type { GpuLock } from './gpuLock'
@@ -471,15 +473,23 @@ async function moments(ctx: StepContext): Promise<void> {
     // it, the heuristic alone decides; either way this never blocks a clip
     // from being reviewed (a request that fails just falls back, see
     // `pickStructureWithLlm`).
-    for (const clip of clips) {
-      throwIfAborted(ctx.signal)
-      const signals = computeSignals(clipFacts(clip, loudness, 0))
-      clip.structureDecision = llm
-        ? await pickStructureWithLlm({ signals, words: clip.words, chatMessages: clip.chatMessages, clipStartSec: clip.start }, (prompt, schema) =>
-            llm.server.complete([{ role: 'system', content: STRUCTURE_SYSTEM_PROMPT }, { role: 'user', content: prompt }], schema, ctx.signal)
-          )
-        : pickStructure(signals, clip.words, clip.start)
-    }
+    throwIfAborted(ctx.signal)
+    let structureError: unknown = null
+    const decisions = await runPool(
+      clips,
+      async (clip) => {
+        const signals = computeSignals(clipFacts(clip, loudness, 0))
+        return llm
+          ? await pickStructureWithLlm({ signals, words: clip.words, chatMessages: clip.chatMessages, clipStartSec: clip.start }, (prompt, schema) =>
+              llm.server.complete([{ role: 'system', content: STRUCTURE_SYSTEM_PROMPT }, { role: 'user', content: prompt }], schema, ctx.signal)
+            )
+          : pickStructure(signals, clip.words, clip.start)
+      },
+      // A request that fails already falls back inside `pickStructureWithLlm`; anything thrown here is a bug and stops the step, as before.
+      { concurrency: llm?.slots ?? 1, maxFailures: 1, signal: ctx.signal, onFailure: (err) => (structureError ??= err) }
+    )
+    if (structureError) throw structureError
+    clips.forEach((clip, i) => (clip.structureDecision = decisions.results[i] ?? null))
 
     await writeJsonAtomic(join(ctx.dir, 'moments.json'), {
       candidates,
@@ -503,7 +513,12 @@ interface LlmSession {
    * serving during the swap (see `tools/llmMigration.ts`), keep one sample.
    */
   twoSample: boolean
+  /** Requests llama-server works on at once. */
+  slots: number
 }
+
+/** After this many failed model requests, the rest of a step goes without the model. */
+const MAX_LLM_FAILURES = 3
 
 /** A second sample's sampling, distinct enough from the default request to be a real second opinion. */
 const SECOND_SAMPLE = { temperature: 0.6, seed: 7919 }
@@ -518,8 +533,10 @@ async function openLlm(ctx: StepContext): Promise<LlmSession | null> {
     return null
   }
   const twoSample = !ctx.llmModelOverride && model === qwenModel
+  const gpu = ctx.hw.llm === 'vulkan'
+  const slots = llmSlots(gpu, twoSample)
   const release = await ctx.gpu.acquire(ctx.signal)
-  const server = new LlamaServer(exe, ctx.paths.root, relative(ctx.paths.root, model), ctx.hw.llm === 'vulkan')
+  const server = new LlamaServer({ exe, cwd: ctx.paths.root, model: relative(ctx.paths.root, model), gpu, slots })
   ctx.progress(0.02, 'Starting the language model')
   try {
     await server.start(ctx.signal)
@@ -533,6 +550,7 @@ async function openLlm(ctx: StepContext): Promise<LlmSession | null> {
   return {
     server,
     twoSample,
+    slots,
     close: () => {
       server.stop()
       release()
@@ -583,30 +601,29 @@ async function refineCandidates(
   words: Word[],
   duration: number
 ): Promise<(Refined | null)[]> {
-  const out: (Refined | null)[] = candidates.map(() => null)
   const system = refineSystemPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter: null })
-  let failures = 0
-  for (let i = 0; i < candidates.length; i++) {
-    throwIfAborted(ctx.signal)
-    ctx.progress(0.05 + (0.55 * i) / candidates.length, null)
-    const c = candidates[i]!
-    const range = excerptRange(c, duration)
-    const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
-    const chapter = meta.chapters.find((ch) => c.event >= ch.start && c.event < ch.end)?.title ?? null
-    const prompt = buildPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, c, excerpt, topChat(messages, { start: c.peak - 12, end: c.peak + 5 }))
-    try {
-      out[i] = await askAndParse(ctx, llm, system, prompt, excerpt, duration)
-      if (!out[i]) ctx.log.warn('unusable model answer')
-    } catch (err) {
-      if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
-      ctx.log.warn('model request failed', err)
-      if (++failures >= 3) {
-        ctx.log.warn('too many model failures; using signals for the rest')
-        break
-      }
+  ctx.progress(0.05, null)
+  const { results, stoppedEarly } = await runPool(
+    candidates,
+    async (c) => {
+      const range = excerptRange(c, duration)
+      const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
+      const chapter = meta.chapters.find((ch) => c.event >= ch.start && c.event < ch.end)?.title ?? null
+      const prompt = buildPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, c, excerpt, topChat(messages, { start: c.peak - 12, end: c.peak + 5 }))
+      const r = await askAndParse(ctx, llm, system, prompt, excerpt, duration)
+      if (!r) ctx.log.warn('unusable model answer')
+      return r
+    },
+    {
+      concurrency: llm.slots,
+      maxFailures: MAX_LLM_FAILURES,
+      signal: ctx.signal,
+      onSettled: (n, total) => ctx.progress(0.05 + (0.55 * n) / total, null),
+      onFailure: (err) => ctx.log.warn('model request failed', err)
     }
-  }
-  return out
+  )
+  if (stoppedEarly) ctx.log.warn('too many model failures; using signals for the rest')
+  return results.map((r) => r ?? null)
 }
 
 /** Signal score given to moments found only in the transcript. */
@@ -627,23 +644,20 @@ async function scanTranscript(
   const windows = scanWindows(duration, words, avoid).slice(0, 160)
   ctx.log.info(`scanning ${windows.length} transcript windows`)
   const transcriptSignal = TRANSCRIPT_SIGNAL * adjustments.transcriptWeight
-  const out: Pick[] = []
   const system = scanSystemPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter: null })
-  let failures = 0
-  for (let i = 0; i < windows.length; i++) {
-    throwIfAborted(ctx.signal)
-    ctx.progress(0.6 + (0.4 * i) / windows.length, 'Reading the transcript')
-    const range = windows[i]!
-    // A scanned window has no chat or loudness backing it up, so unlike a
-    // found candidate it is never kept anyway once it looks hallucinated --
-    // skip it before it ever reaches the model.
-    if (assessSpeech(range, words, badTranscript).noSpeech) continue
-    const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
-    const chapter = meta.chapters.find((ch) => range.start >= ch.start && range.start < ch.end)?.title ?? null
-    try {
+  ctx.progress(0.6, 'Reading the transcript')
+  const { results, stoppedEarly } = await runPool(
+    windows,
+    async (range): Promise<Pick | null> => {
+      // A scanned window has no chat or loudness backing it up, so unlike a
+      // found candidate it is never kept anyway once it looks hallucinated --
+      // skip it before it ever reaches the model.
+      if (assessSpeech(range, words, badTranscript).noSpeech) return null
+      const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
+      const chapter = meta.chapters.find((ch) => range.start >= ch.start && range.start < ch.end)?.title ?? null
       const prompt = buildScanPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, excerpt)
       const r = await askAndParse(ctx, llm, system, prompt, excerpt, duration, true)
-      if (!r || !r.keep || r.rating < TRANSCRIPT_MIN_RATING) continue
+      if (!r || !r.keep || r.rating < TRANSCRIPT_MIN_RATING) return null
       const score = combinedScore(transcriptSignal, r.rating)
       // The scan gives a fixed nominal signal, not a z-score; scoreToStrength
       // puts it on the same raw scale as chat- and audio-backed candidates
@@ -661,14 +675,18 @@ async function scanTranscript(
         audioZ: 0,
         reasons: ['Transcript']
       }
-      out.push({ cand, refined: r, window: r.window, title: r.title ?? fallbackTitle(words, r.window), score, strength, chatZ: 0, audioZ: 0, rating: r.rating })
-    } catch (err) {
-      if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
-      ctx.log.warn('model request failed', err)
-      if (++failures >= 3) break
+      return { cand, refined: r, window: r.window, title: r.title ?? fallbackTitle(words, r.window), score, strength, chatZ: 0, audioZ: 0, rating: r.rating }
+    },
+    {
+      concurrency: llm.slots,
+      maxFailures: MAX_LLM_FAILURES,
+      signal: ctx.signal,
+      onSettled: (n, total) => ctx.progress(0.6 + (0.4 * n) / total, 'Reading the transcript'),
+      onFailure: (err) => ctx.log.warn('model request failed', err)
     }
-  }
-  return out
+  )
+  if (stoppedEarly) ctx.log.warn('too many model failures; the rest of the transcript goes unread')
+  return results.filter((p): p is Pick => !!p)
 }
 
 // ------------------------------------------------------------- clip captions
