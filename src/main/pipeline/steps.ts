@@ -20,13 +20,14 @@ import {
   excerptLines,
   excerptRange,
   parseAnswer,
+  ratingFactor,
   scanWindows,
   SYSTEM_PROMPT,
   topChat,
   type Refined
 } from '../core/llmPrompt'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
-import { fallbackTitle, findCandidates, selectNonOverlapping, targetClipCount, type Candidate } from '../core/moments'
+import { fallbackTitle, findCandidates, maxClipCount, MIN_CLIPS, scoreToStrength, selectByQuality, type Candidate } from '../core/moments'
 import { deriveTasteAdjustments, type TasteAdjustments } from '../core/taste'
 import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
 import type { AppPaths } from '../paths'
@@ -303,8 +304,22 @@ interface Pick {
   refined: Refined | null
   window: Range
   title: string
+  /** 0..1, shown to him and blended with the model's rating when present. */
   score: number
+  /**
+   * Raw signal strength scaled by the model's rating when there is one (see
+   * `ratingFactor`), used only to rank and quality-gate the final selection.
+   * Kept separate from `score`: once `score` is bounded to 0..1 (see
+   * `strengthToScore`), a very strong candidate cannot be told apart from a
+   * merely decent one, and a quality bar relative to the strongest candidate
+   * needs that difference to mean anything.
+   */
   strength: number
+  /** Copied from `cand`: which signals quality-gating treats this as coming from. */
+  chatZ: number
+  audioZ: number
+  /** The model's 1..10 rating, or null with no model -- see `selectByQuality`. */
+  rating: number | null
 }
 
 /** Which signal a candidate mainly came from, for taste learning. */
@@ -325,12 +340,14 @@ async function moments(ctx: StepContext): Promise<void> {
   const messages = parseChatLog(chatText)
   const loudness = parseLoudnessLog(loudText, duration)
   const words = transcript.words
-  const target = targetClipCount(duration)
+  // Ceiling only: the finder never fills up to this, it just never goes past
+  // it. How many clips actually come out is decided by quality, below.
+  const ceiling = maxClipCount(duration)
   // How his past accepts/rejects and trims have nudged the defaults; identical
   // to today's behaviour until there is real history to learn from.
   const adjustments = deriveTasteAdjustments(ctx.store.getTasteHistory())
-  const candidates = findCandidates({ durationSec: duration, messages, loudness, words, muted }, { limit: Math.min(40, target * 2) }, adjustments)
-  ctx.log.info(`${messages.length} chat messages, ${candidates.length} candidates, target ${target}`)
+  const candidates = findCandidates({ durationSec: duration, messages, loudness, words, muted }, { limit: Math.min(40, ceiling * 2) }, adjustments)
+  ctx.log.info(`${messages.length} chat messages, ${candidates.length} candidates, ceiling ${ceiling}`)
 
   const llm = await openLlm(ctx)
   let refined: (Refined | null)[] = candidates.map(() => null)
@@ -339,7 +356,7 @@ async function moments(ctx: StepContext): Promise<void> {
     if (llm) refined = await refineCandidates(ctx, llm, meta, candidates, messages, words, duration)
     const keptCount = candidates.filter((_, i) => refined[i]?.keep !== false).length
     // A quiet chat gives too few moments: let the model read the transcript too.
-    if (llm && keptCount < target) {
+    if (llm && keptCount < ceiling) {
       const avoid = [...muted, ...candidates.map((c) => c.window)]
       scanned = await scanTranscript(ctx, llm, meta, words, avoid, duration, adjustments)
     }
@@ -350,13 +367,24 @@ async function moments(ctx: StepContext): Promise<void> {
   let picks: Pick[] = candidates.map((cand, i) => {
     const r = refined[i] ?? null
     const window = r?.window ?? cand.window
-    const score = combinedScore(cand.score, r?.rating ?? null)
-    return { cand, refined: r, window, title: r?.title ?? fallbackTitle(words, window), score, strength: score }
+    const rating = r?.rating ?? null
+    const score = combinedScore(cand.score, rating)
+    return {
+      cand,
+      refined: r,
+      window,
+      title: r?.title ?? fallbackTitle(words, window),
+      score,
+      strength: cand.strength * ratingFactor(rating),
+      chatZ: cand.chatZ,
+      audioZ: cand.audioZ,
+      rating
+    }
   })
   const kept = picks.filter((p) => p.refined?.keep !== false)
   // If the model rejected nearly everything, trust the signals for a few.
   picks = kept.length >= Math.min(3, picks.length) ? kept : picks
-  const chosen = selectNonOverlapping([...picks, ...scanned], target)
+  const chosen = selectByQuality([...picks, ...scanned], MIN_CLIPS, ceiling)
   if (chosen.length === 0) {
     ctx.store.replaceClips(ctx.job.id, [])
     throw new UserError('No stand-out moments were found in this VOD. Chat and audio stayed calm the whole time.', { retryable: false })
@@ -505,17 +533,23 @@ async function scanTranscript(
       const r = parseAnswer(await ask(ctx, llm, buildScanPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, excerpt)), excerpt, duration)
       if (!r || !r.keep || r.rating < TRANSCRIPT_MIN_RATING) continue
       const score = combinedScore(transcriptSignal, r.rating)
+      // The scan gives a fixed nominal signal, not a z-score; scoreToStrength
+      // puts it on the same raw scale as chat- and audio-backed candidates
+      // so the quality bar can compare them fairly. It already only reaches
+      // here at or above TRANSCRIPT_MIN_RATING, but still scales with rating
+      // like every other candidate.
+      const strength = scoreToStrength(transcriptSignal) * ratingFactor(r.rating)
       const cand: Candidate = {
         peak: (r.window.start + r.window.end) / 2,
         event: r.window.start,
         window: r.window,
-        strength: score,
+        strength,
         score: transcriptSignal,
         chatZ: 0,
         audioZ: 0,
         reasons: ['Transcript']
       }
-      out.push({ cand, refined: r, window: r.window, title: r.title ?? fallbackTitle(words, r.window), score, strength: score })
+      out.push({ cand, refined: r, window: r.window, title: r.title ?? fallbackTitle(words, r.window), score, strength, chatZ: 0, audioZ: 0, rating: r.rating })
     } catch (err) {
       if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
       ctx.log.warn('model request failed', err)

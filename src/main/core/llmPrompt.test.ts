@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate } from './moments'
-import { buildPrompt, buildScanPrompt, cleanTitle, scanWindows, combinedScore, excerptLines, excerptRange, parseAnswer, topChat, type Excerpt } from './llmPrompt'
+import { buildPrompt, buildScanPrompt, cleanTitle, scanWindows, combinedScore, excerptLines, excerptRange, parseAnswer, ratingFactor, topChat, type Excerpt } from './llmPrompt'
 
 const cand: Candidate = {
   peak: 1010,
@@ -90,6 +90,28 @@ describe('titles and scores', () => {
   it('blends signal and rating', () => {
     expect(combinedScore(0.5, null)).toBe(0.5)
     expect(combinedScore(0.5, 10)).toBeCloseTo(0.725)
+  })
+})
+
+describe('ratingFactor', () => {
+  it('leaves strength unchanged with no model', () => {
+    expect(ratingFactor(null)).toBe(1)
+  })
+  it('boosts a highly-rated candidate and shrinks a poorly-rated one', () => {
+    expect(ratingFactor(10)).toBeGreaterThan(1)
+    expect(ratingFactor(9)).toBeGreaterThan(1)
+    expect(ratingFactor(1)).toBeLessThan(1)
+    expect(ratingFactor(3)).toBeLessThan(1)
+  })
+  it('is neutral around a middling rating', () => {
+    expect(ratingFactor(5)).toBeGreaterThan(0.85)
+    expect(ratingFactor(5)).toBeLessThan(1.15)
+    expect(ratingFactor(6)).toBeGreaterThan(0.85)
+    expect(ratingFactor(6)).toBeLessThan(1.15)
+  })
+  it('clamps so one extreme rating cannot erase or overpower a candidate', () => {
+    expect(ratingFactor(1)).toBeGreaterThan(0)
+    expect(ratingFactor(10)).toBeLessThan(3)
   })
 })
 

@@ -199,3 +199,26 @@ export function combinedScore(signalScore: number, rating: number | null): numbe
   if (rating === null) return signalScore
   return 0.55 * signalScore + 0.45 * (rating / 10)
 }
+
+/** Rating (1..10) that neither boosts nor shrinks a candidate's raw strength. */
+const RATING_NEUTRAL = 5.5
+const RATING_SENSITIVITY = 0.15
+const RATING_FACTOR_MIN = 0.4
+const RATING_FACTOR_MAX = 1.8
+
+/**
+ * How much the model's rating scales a candidate's raw signal strength, for
+ * ranking and quality-gating (see `selectByQuality`) rather than just the
+ * displayed score: without this, a loud-only moment the model loves could
+ * never clear the quality bar, and a candidate it hates would rank exactly
+ * as if no model had looked at it. Neutral around a middling rating, so no
+ * model (`rating === null`) leaves strength unchanged, and clamped so one
+ * extreme rating cannot make a candidate unbeatable or erase it outright --
+ * a very low rating is instead handled as an outright drop, see
+ * `selectByQuality`.
+ */
+export function ratingFactor(rating: number | null): number {
+  if (rating === null) return 1
+  const raw = 1 + (rating - RATING_NEUTRAL) * RATING_SENSITIVITY
+  return Math.max(RATING_FACTOR_MIN, Math.min(RATING_FACTOR_MAX, raw))
+}

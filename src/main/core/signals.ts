@@ -9,7 +9,7 @@ export type Series = Float64Array
 const LAUGH =
   /\b(kekw|kekl|lul|lulw|omegalul|lmao+|lmfao|lol+|icant|pepelaugh|xd+|mdr+|ptdr+|jaja+|haha+|hehe+|dead|💀)\b|😂|🤣|💀/i
 const HYPE =
-  /\b(pog\w*|poggers|pogchamp|w{1,}|clip( ?it| ?that)?|!clip|holy|no ?way|omg|lets ?go+|let'?s go+|gg+|ez|insane|clutch|hype)\b/i
+  /\b(pog\w*|poggers|pogchamp|w{1,}|l{1,}|clip( ?it| ?that)?|!clip|holy|no ?way|omg|lets ?go+|let'?s go+|gg+|ez|insane|clutch|hype)\b/i
 const SHOCK = /^\?+$|\bwtf\b|\bmonka\w*|\bd:|\bno+o+\b|\bwhat\b|😱|😳/i
 
 /** How strong a reaction one chat message is (1..3). */
@@ -23,26 +23,70 @@ export function reactionWeight(text: string): number {
   return Math.min(w, 3)
 }
 
-/** Seconds a single chatter must wait before their next message counts again. */
-const PER_USER_COOLDOWN = 3
+/** Seconds a rolling window looks around each second to count distinct chatters. */
+const CHATTER_WINDOW_SEC = 20
 
 /**
- * Chat reaction per second. Each chatter counts at most once every few seconds so
- * one spammer cannot fake a spike.
+ * How much distinct-chatter reaction is happening around each second: each
+ * chatter is counted at most once per rolling `windowSec` window, weighted by
+ * their single strongest reaction in it. This counts people, not messages, so
+ * one chatter posting several times cannot fake a crowd, and a handful of
+ * different regulars reacting together stands out even in a small, slow
+ * chat. Because it is turned into a z-score against this stream's own
+ * rolling baseline (see `robustZ`), it scales to a large, fast chat too: the
+ * same handful of people means nothing there, and only an unusually wide
+ * burst of different chatters registers.
  */
-export function chatSeries(messages: ChatMessage[], durationSec: number): Series {
+export function chatterBurstSeries(messages: ChatMessage[], durationSec: number, windowSec = CHATTER_WINDOW_SEC): Series {
   const n = Math.max(1, Math.ceil(durationSec))
   const out = new Float64Array(n)
-  const last = new Map<string, number>()
-  for (const m of messages) {
-    if (m.t < 0 || m.t >= n) continue
-    const key = m.user.toLowerCase()
-    const prev = last.get(key)
-    if (prev !== undefined && m.t - prev < PER_USER_COOLDOWN) continue
-    last.set(key, m.t)
-    out[Math.floor(m.t)]! += reactionWeight(m.text)
+  const events = messages
+    .filter((m) => m.t >= 0 && m.t < n)
+    .map((m) => ({ t: m.t, user: m.user.toLowerCase(), w: reactionWeight(m.text) }))
+    .sort((a, b) => a.t - b.t)
+  if (events.length === 0) return out
+
+  const half = windowSec / 2
+  const activeByUser = new Map<string, number[]>()
+  const maxOf = (list: number[]): number => list.reduce((m, w) => Math.max(m, w), 0)
+  let sum = 0
+  let lo = 0
+  let hi = 0
+  for (let t = 0; t < n; t++) {
+    while (hi < events.length && events[hi]!.t <= t + half) {
+      const e = events[hi]!
+      const list = activeByUser.get(e.user) ?? []
+      const before = maxOf(list)
+      list.push(e.w)
+      activeByUser.set(e.user, list)
+      sum += maxOf(list) - before
+      hi++
+    }
+    while (lo < events.length && events[lo]!.t < t - half) {
+      const e = events[lo]!
+      const list = activeByUser.get(e.user)
+      if (list) {
+        const before = maxOf(list)
+        list.shift()
+        if (list.length === 0) activeByUser.delete(e.user)
+        sum += maxOf(list) - before
+      }
+      lo++
+    }
+    out[t] = sum
   }
   return out
+}
+
+/** Distinct chatters (unweighted) with a message in [from, to]. */
+export function distinctChatters(messages: ChatMessage[], from: number, to: number): number {
+  const set = new Set<string>()
+  for (const m of messages) {
+    if (m.t < from) continue
+    if (m.t > to) break
+    set.add(m.user.toLowerCase())
+  }
+  return set.size
 }
 
 /** Centred moving average over `window` seconds. */
