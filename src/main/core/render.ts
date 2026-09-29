@@ -49,6 +49,8 @@ export interface RenderSpec {
   loudness: LoudnessMeasurement | null
   encoder: EncoderId
   output: string
+  /** Output frame size; the format's full size when omitted (a small preview passes its own). */
+  outputSize?: Size
 }
 
 export const crop = (r: PixelRect): string => `crop=${r.w}:${r.h}:${r.x}:${r.y}`
@@ -58,15 +60,20 @@ export function clampFps(sourceFps: number): number {
   return Math.min(60, Math.max(24, Math.round(sourceFps || 30)))
 }
 
+const evenPx = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
+
+/** The blurred background is drawn at this fraction of the output size and scaled back up; the blur hides the lost detail. */
+const BLUR_DOWNSCALE = 4
+
 /**
  * The layout part of the video graph: crops and composes the source frame
  * (facecam over game, blurred fill, or a plain crop) into `out.width x
- * out.height`, ending in a pad named `base`. Shared with `core/edlFilter.ts`,
- * which runs it on a re-timed stream instead of the raw input, so the input
- * pad is a parameter.
+ * out.height` (the format's full size unless a smaller `out` is given, for a
+ * throwaway preview), ending in a pad named `base`. Shared with
+ * `core/edlFilter.ts`, which runs it on a re-timed stream instead of the raw
+ * input, so the input pad is a parameter.
  */
-export function layoutBaseFilter(inputPad: string, format: RenderFormat, layout: Layout, source: Size): string[] {
-  const out = OUTPUT_SIZE[format]
+export function layoutBaseFilter(inputPad: string, format: RenderFormat, layout: Layout, source: Size, out: Size = OUTPUT_SIZE[format]): string[] {
   const parts: string[] = []
 
   if (format === 'horizontal') {
@@ -74,18 +81,25 @@ export function layoutBaseFilter(inputPad: string, format: RenderFormat, layout:
     parts.push(`[${inputPad}]${crop(game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1[base]`)
   } else if (layout.kind === 'blur_fill') {
     const game = toPixels(layout.game, source)
+    // Blur at a quarter of the size (a sigma of 24 at full size is 6 here) and
+    // scale the result back up: far fewer pixels for gblur to touch.
+    const bg = { width: evenPx(out.width / BLUR_DOWNSCALE), height: evenPx(out.height / BLUR_DOWNSCALE) }
+    const sigma = Math.max(1, (24 / BLUR_DOWNSCALE) * (out.width / OUTPUT_SIZE.vertical.width))
     parts.push(`[${inputPad}]${crop(game)},split=2[bgsrc][fgsrc]`)
     parts.push(
-      `[bgsrc]scale=${out.width}:${out.height}:force_original_aspect_ratio=increase,crop=${out.width}:${out.height},gblur=sigma=24,eq=brightness=-0.06[bg]`
+      `[bgsrc]scale=${bg.width}:${bg.height}:force_original_aspect_ratio=increase:flags=bilinear,crop=${bg.width}:${bg.height},gblur=sigma=${Number(sigma.toFixed(2))},eq=brightness=-0.06,scale=${out.width}:${out.height}:flags=bilinear[bg]`
     )
     parts.push(`[fgsrc]scale=${out.width}:-2:flags=lanczos[fg]`)
     parts.push(`[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[base]`)
   } else {
     const g = verticalGeometry(layout, source)
     if (g.cam) {
+      // The geometry is worked out for the full-size frame; a smaller output keeps its proportions.
+      const camHeight = out.height === OUTPUT_SIZE.vertical.height ? g.camHeight : evenPx((g.camHeight * out.height) / OUTPUT_SIZE.vertical.height)
+      const gameHeight = out.height - camHeight
       parts.push(`[${inputPad}]split=2[camsrc][gamesrc]`)
-      parts.push(`[camsrc]${crop(g.cam)},scale=${out.width}:${g.camHeight}:flags=lanczos,setsar=1[cam]`)
-      parts.push(`[gamesrc]${crop(g.game)},scale=${out.width}:${g.gameHeight}:flags=lanczos,setsar=1[game]`)
+      parts.push(`[camsrc]${crop(g.cam)},scale=${out.width}:${camHeight}:flags=lanczos,setsar=1[cam]`)
+      parts.push(`[gamesrc]${crop(g.game)},scale=${out.width}:${gameHeight}:flags=lanczos,setsar=1[game]`)
       parts.push('[cam][game]vstack=inputs=2[base]')
     } else {
       parts.push(`[${inputPad}]${crop(g.game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1[base]`)
@@ -97,7 +111,7 @@ export function layoutBaseFilter(inputPad: string, format: RenderFormat, layout:
 /** The video part of the filter graph, ending in [vout]. */
 export function videoFilter(spec: RenderSpec): string {
   const fps = clampFps(spec.sourceFps)
-  const parts = layoutBaseFilter('0:v', spec.format, spec.layout, spec.source)
+  const parts = layoutBaseFilter('0:v', spec.format, spec.layout, spec.source, spec.outputSize)
 
   let chain = '[base]fps=' + fps
   if (spec.assFile) {
@@ -169,7 +183,7 @@ export function encoderArgs(encoder: EncoderId, fps: number): string[] {
     case 'h264_qsv':
       return ['-c:v', 'h264_qsv', '-preset', 'slow', '-global_quality', '22', '-profile:v', 'high', '-g', gop]
     case 'libx264':
-      return ['-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-profile:v', 'high', '-g', gop]
+      return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-profile:v', 'high', '-g', gop]
   }
 }
 

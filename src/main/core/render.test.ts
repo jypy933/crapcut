@@ -80,6 +80,24 @@ describe('videoFilter', () => {
     expect(h).toContain('scale=1920:1080')
     expect(h).not.toContain('ass=')
   })
+  it('blurs the fill background at a quarter of the size and scales it back up', () => {
+    const f = videoFilter(spec({ layout: { ...camGame, kind: 'blur_fill' } }))
+    expect(f).toContain('scale=270:480:force_original_aspect_ratio=increase:flags=bilinear,crop=270:480,gblur=sigma=6,eq=brightness=-0.06,scale=1080:1920:flags=bilinear[bg]')
+    // The sharp foreground keeps its full-size lanczos scale.
+    expect(f).toContain('[fgsrc]scale=1080:-2:flags=lanczos[fg]')
+  })
+  it('scales the layout to a smaller output size, keeping the proportions', () => {
+    const small = { width: 360, height: 640 }
+    const cam = videoFilter(spec({ outputSize: small }))
+    const g = verticalGeometry(camGame, src)
+    const camHeight = Math.round((g.camHeight * 640) / 1920 / 2) * 2
+    expect(cam).toContain(`scale=360:${camHeight}:flags=lanczos`)
+    expect(cam).toContain(`scale=360:${640 - camHeight}:flags=lanczos`)
+    const blur = videoFilter(spec({ layout: { ...camGame, kind: 'blur_fill' }, outputSize: small }))
+    expect(blur).toContain('scale=90:160:force_original_aspect_ratio=increase:flags=bilinear,crop=90:160,gblur=sigma=2,')
+    expect(blur).toContain('scale=360:640:flags=bilinear[bg]')
+    expect(videoFilter(spec({ format: 'horizontal', outputSize: { width: 640, height: 360 } }))).toContain('scale=640:360:flags=lanczos')
+  })
   it('caps the frame rate', () => {
     expect(videoFilter(spec({ sourceFps: 144 }))).toContain('fps=60')
     expect(videoFilter(spec({ sourceFps: 0 }))).toContain('fps=30')
@@ -134,6 +152,9 @@ describe('buildRenderArgs', () => {
   })
   it('has settings for every encoder', () => {
     for (const e of ['h264_nvenc', 'h264_amf', 'h264_qsv', 'libx264'] as const) expect(encoderArgs(e, 60)).toContain(e)
+  })
+  it('uses the veryfast preset on the CPU fallback', () => {
+    expect(encoderArgs('libx264', 60).join(' ')).toContain('-preset veryfast -crf 20')
   })
 })
 
