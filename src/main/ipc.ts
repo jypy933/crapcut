@@ -132,7 +132,7 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
       void setup.start(optionalModelArtifactIds(id, hardware) as ToolId[])
     },
     'models:remove': (id: OptionalModelId) => {
-      setup.remove(optionalModelArtifactIds(id, hardware) as ToolId[])
+      setup.remove(optionalModelArtifactIds(id, hardware) as ToolId[], () => runner.hasWork() || exporter.hasWork() || bestOf.hasWork())
     }
   }
 

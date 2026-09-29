@@ -3,12 +3,12 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { formatBytes } from '@shared/format'
 import { buildOptionalModels, type OptionalModel } from '@shared/optionalModels'
 import type { AppInfo, AutostartStatus, SetupStatus, UpdateState } from '@shared/types'
-import { call, useEvent } from '../api'
+import { call, errorText, useEvent } from '../api'
 import { ProgressBar, Spinner, Toggle } from '../components/ui'
 
 const ACTIVE_STATES = new Set(['downloading', 'verifying', 'installing'])
 
-function ModelPartRow({ model }: { model: OptionalModel }): ReactNode {
+function ModelPartRow({ model, onDownload, onCancel, onRemove }: { model: OptionalModel; onDownload: () => void; onCancel: () => void; onRemove: () => void }): ReactNode {
   const busy = ACTIVE_STATES.has(model.state)
   return (
     <div className="model-part">
@@ -36,15 +36,15 @@ function ModelPartRow({ model }: { model: OptionalModel }): ReactNode {
         {model.state === 'verifying' ? 'Checking...' : model.state === 'installing' ? 'Installing...' : formatBytes(model.sizeBytes)}
       </span>
       {model.state === 'ready' ? (
-        <button type="button" className="btn sm ghost" onClick={() => void call('models:remove', model.id)}>
+        <button type="button" className="btn sm ghost" onClick={onRemove}>
           <Trash2 size={13} /> Remove
         </button>
       ) : busy ? (
-        <button type="button" className="btn sm ghost" onClick={() => void call('setup:cancel')}>
+        <button type="button" className="btn sm ghost" onClick={onCancel}>
           Cancel
         </button>
       ) : (
-        <button type="button" className="btn sm" onClick={() => void call('models:download', model.id)}>
+        <button type="button" className="btn sm" onClick={onDownload}>
           <Download size={13} /> {model.state === 'failed' ? 'Retry' : 'Download'}
         </button>
       )}
@@ -76,6 +76,7 @@ export function About({ update }: { update: UpdateState }): ReactNode {
   const [tuned, setTuned] = useState(false)
   const [autostart, setAutostart] = useState<AutostartStatus | null>(null)
   const [setup, setSetup] = useState<SetupStatus | null>(null)
+  const [modelsError, setModelsError] = useState<string | null>(null)
   useEffect(() => {
     void call('app:info').then(setInfo)
     void call('taste:status').then((s) => setTuned(s.tuned))
@@ -86,6 +87,15 @@ export function About({ update }: { update: UpdateState }): ReactNode {
   if (!info) return null
 
   const models = setup?.hardware ? buildOptionalModels(setup.hardware, setup.components) : []
+
+  function downloadModel(id: OptionalModel['id']): void {
+    setModelsError(null)
+    void call('models:download', id).catch((err) => setModelsError(errorText(err)))
+  }
+  function removeModel(id: OptionalModel['id']): void {
+    setModelsError(null)
+    void call('models:remove', id).catch((err) => setModelsError(errorText(err)))
+  }
 
   return (
     <div className="page">
@@ -135,9 +145,15 @@ export function About({ update }: { update: UpdateState }): ReactNode {
           <p className="muted small">Not required. Each downloads once from its official source and is checked before use.</p>
           <div className="card model-parts">
             {models.map((m) => (
-              <ModelPartRow key={m.id} model={m} />
+              <ModelPartRow key={m.id} model={m} onDownload={() => downloadModel(m.id)} onCancel={() => void call('setup:cancel')} onRemove={() => removeModel(m.id)} />
             ))}
           </div>
+          {modelsError && (
+            <div className="error">
+              <AlertCircle size={15} style={{ flex: 'none', marginTop: 2 }} />
+              {modelsError}
+            </div>
+          )}
         </>
       )}
 

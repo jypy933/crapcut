@@ -129,6 +129,38 @@ describe('SetupManager', () => {
     expect(s.components.find((c) => c.id === 'model-llm-8b')?.state).toBe('missing')
   })
 
+  it('remove() refuses with one sentence while a job or export is using the part', async () => {
+    const { registry, removed } = fakeRegistry({ installed: ['llama', 'model-llm-8b'] })
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    expect(() => m.remove(['llama', 'model-llm-8b'], () => true)).toThrow('Wait until the current job and exports finish.')
+    expect(removed).toEqual([])
+    const s = await m.status()
+    expect(s.components.find((c) => c.id === 'model-llm-8b')?.state).toBe('ready')
+  })
+
+  it('remove() proceeds when nothing is using the part', () => {
+    const { registry, removed } = fakeRegistry({ installed: ['llama'] })
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    m.remove(['llama'], () => false)
+    expect(removed).toEqual(['llama'])
+  })
+
+  it('remove() leaves a component matching disk when the deletion itself fails', async () => {
+    const registry = {
+      isInstalled: vi.fn(() => true), // rmSync threw before the files were actually gone
+      partialBytes: () => 0,
+      install: vi.fn(),
+      remove: vi.fn(() => {
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      })
+    } as unknown as ToolRegistry
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    expect(() => m.remove(['llama'])).toThrow('Could not remove')
+    const s = await m.status()
+    // isInstalled() still says yes, so the component stays "ready" rather than a half-deleted "missing".
+    expect(s.components.find((c) => c.id === 'llama')?.state).toBe('ready')
+  })
+
   it('remove() does nothing while a download is running', async () => {
     let resolveInstall: () => void = () => {}
     const registry = {

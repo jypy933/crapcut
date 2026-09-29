@@ -4,7 +4,7 @@
 import { statfs } from 'node:fs/promises'
 import type { HardwareProfile, SetupComponent, SetupStatus } from '@shared/types'
 import { EtaEstimator } from '../core/eta'
-import { isCancelled, userMessage } from '../util/errors'
+import { isCancelled, UserError, userMessage } from '../util/errors'
 import { logger } from '../util/log'
 import { artifact, neededArtifacts, type Artifact, type ToolId } from './manifest'
 import type { ToolRegistry } from './registry'
@@ -186,12 +186,29 @@ export class SetupManager {
     }
   }
 
-  /** Deletes installed (or partially downloaded) artifacts to free space. Ignored while a download is running. */
-  remove(ids: readonly ToolId[]): void {
+  /**
+   * Deletes installed (or partially downloaded) artifacts to free space.
+   * Ignored while a download is running. `inUse`, when it returns true,
+   * refuses with one plain sentence instead (e.g. a job or export still
+   * has the files open, so deleting them on Windows would fail partway
+   * through and leave a broken install).
+   */
+  remove(ids: readonly ToolId[], inUse?: () => boolean): void {
     if (this.running) return
+    if (inUse?.()) throw new UserError('Wait until the current job and exports finish.')
     for (const id of ids) {
-      this.registry.remove(artifact(id))
-      this.update(id, { state: 'missing', progress: 0 }, true)
+      const a = artifact(id)
+      try {
+        this.registry.remove(a)
+        this.update(id, { state: 'missing', progress: 0 }, true)
+      } catch (err) {
+        // Leave the component matching what's actually on disk, whatever
+        // partially happened, rather than guessing.
+        log.error(`remove failed: ${a.id}`, err)
+        const stillInstalled = this.registry.isInstalled(a)
+        this.update(id, { state: stillInstalled ? 'ready' : 'missing', progress: stillInstalled ? 1 : 0 }, true)
+        throw new UserError(`Could not remove ${a.label}. Make sure no job or export is using it and try again.`, { cause: err })
+      }
     }
   }
 }
