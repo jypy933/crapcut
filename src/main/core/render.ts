@@ -51,42 +51,55 @@ export interface RenderSpec {
   output: string
 }
 
-const crop = (r: PixelRect): string => `crop=${r.w}:${r.h}:${r.x}:${r.y}`
+export const crop = (r: PixelRect): string => `crop=${r.w}:${r.h}:${r.x}:${r.y}`
 
-/** The video part of the filter graph, ending in [vout]. */
-export function videoFilter(spec: RenderSpec): string {
-  const out = OUTPUT_SIZE[spec.format]
-  const fps = Math.min(60, Math.max(24, Math.round(spec.sourceFps || 30)))
+/** Frame rate every render targets: Twitch VODs are usually 60 or 30 fps. */
+export function clampFps(sourceFps: number): number {
+  return Math.min(60, Math.max(24, Math.round(sourceFps || 30)))
+}
+
+/**
+ * The layout part of the video graph: crops and composes the source frame
+ * (facecam over game, blurred fill, or a plain crop) into `out.width x
+ * out.height`, ending in a pad named `base`. Shared with `core/edlFilter.ts`,
+ * which runs it on a re-timed stream instead of the raw input, so the input
+ * pad is a parameter.
+ */
+export function layoutBaseFilter(inputPad: string, format: RenderFormat, layout: Layout, source: Size): string[] {
+  const out = OUTPUT_SIZE[format]
   const parts: string[] = []
-  let last: string
 
-  if (spec.format === 'horizontal') {
-    const game = fitAspect(toPixels(spec.layout.game, spec.source), out.width / out.height, spec.source)
-    parts.push(`[0:v]${crop(game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1[base]`)
-    last = 'base'
-  } else if (spec.layout.kind === 'blur_fill') {
-    const game = toPixels(spec.layout.game, spec.source)
-    parts.push(`[0:v]${crop(game)},split=2[bgsrc][fgsrc]`)
+  if (format === 'horizontal') {
+    const game = fitAspect(toPixels(layout.game, source), out.width / out.height, source)
+    parts.push(`[${inputPad}]${crop(game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1[base]`)
+  } else if (layout.kind === 'blur_fill') {
+    const game = toPixels(layout.game, source)
+    parts.push(`[${inputPad}]${crop(game)},split=2[bgsrc][fgsrc]`)
     parts.push(
       `[bgsrc]scale=${out.width}:${out.height}:force_original_aspect_ratio=increase,crop=${out.width}:${out.height},gblur=sigma=24,eq=brightness=-0.06[bg]`
     )
     parts.push(`[fgsrc]scale=${out.width}:-2:flags=lanczos[fg]`)
     parts.push(`[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[base]`)
-    last = 'base'
   } else {
-    const g = verticalGeometry(spec.layout, spec.source)
+    const g = verticalGeometry(layout, source)
     if (g.cam) {
-      parts.push('[0:v]split=2[camsrc][gamesrc]')
+      parts.push(`[${inputPad}]split=2[camsrc][gamesrc]`)
       parts.push(`[camsrc]${crop(g.cam)},scale=${out.width}:${g.camHeight}:flags=lanczos,setsar=1[cam]`)
       parts.push(`[gamesrc]${crop(g.game)},scale=${out.width}:${g.gameHeight}:flags=lanczos,setsar=1[game]`)
       parts.push('[cam][game]vstack=inputs=2[base]')
     } else {
-      parts.push(`[0:v]${crop(g.game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1[base]`)
+      parts.push(`[${inputPad}]${crop(g.game)},scale=${out.width}:${out.height}:flags=lanczos,setsar=1[base]`)
     }
-    last = 'base'
   }
+  return parts
+}
 
-  let chain = `[${last}]fps=${fps}`
+/** The video part of the filter graph, ending in [vout]. */
+export function videoFilter(spec: RenderSpec): string {
+  const fps = clampFps(spec.sourceFps)
+  const parts = layoutBaseFilter('0:v', spec.format, spec.layout, spec.source)
+
+  let chain = '[base]fps=' + fps
   if (spec.assFile) {
     chain += `,ass=${filterValue(spec.assFile)}`
     if (spec.fontsDir) chain += `:fontsdir=${filterValue(spec.fontsDir)}`
@@ -105,7 +118,7 @@ export function filterValue(v: string): string {
   return `'${v.replace(/\\/g, '/').replace(/'/g, "'\\''").replace(/:/g, '\\:')}'`
 }
 
-function loudnormFilter(m: LoudnessMeasurement | null): string {
+export function loudnormFilter(m: LoudnessMeasurement | null): string {
   const base = 'loudnorm=I=-14:TP=-1.5:LRA=11'
   if (!m) return base
   return `${base}:measured_I=${m.inputI}:measured_TP=${m.inputTp}:measured_LRA=${m.inputLra}:measured_thresh=${m.inputThresh}:offset=${m.targetOffset}:linear=true`
@@ -162,7 +175,7 @@ export function encoderArgs(encoder: EncoderId, fps: number): string[] {
 
 /** Full FFmpeg argument list for one clip export. */
 export function buildRenderArgs(spec: RenderSpec): string[] {
-  const fps = Math.min(60, Math.max(24, Math.round(spec.sourceFps || 30)))
+  const fps = clampFps(spec.sourceFps)
   const audio = audioFilter(spec)
   const graph = [videoFilter(spec), audio.filter].filter(Boolean).join(';')
   const args = [
