@@ -17,7 +17,12 @@ export function applyClipPatch(clip: Clip, patch: ClipPatch, layoutExists: (id: 
   if (patch.audio !== undefined) next.audio = patch.audio
   if (patch.formats !== undefined) next.formats = { ...patch.formats }
   if (patch.layoutId !== undefined) next.layoutId = patch.layoutId === null || layoutExists(patch.layoutId) ? patch.layoutId : clip.layoutId
-  if (patch.words !== undefined) next.words = cleanWords(patch.words)
+  if (patch.words !== undefined) {
+    next.words = cleanWords(patch.words)
+    // Marks the clip so a resumed job's clip-captions step never overwrites
+    // his edit with a fresh re-transcription.
+    next.wordsEdited = true
+  }
   if (patch.autoEdit !== undefined) next.autoEdit = patch.autoEdit
 
   if (patch.start !== undefined || patch.end !== undefined) {

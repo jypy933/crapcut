@@ -100,6 +100,20 @@ export async function cutWav(ffmpeg: string, cwd: string, input: string, start: 
   await runTool(ffmpeg, ['-hide_banner', '-nostdin', '-v', 'error', '-y', '-ss', start.toFixed(3), '-t', duration.toFixed(3), '-i', input, '-c', 'copy', output], { cwd, signal })
 }
 
+/**
+ * Cuts [start, start+duration] of the source audio into a 16 kHz mono WAV for
+ * whisper, re-encoding it (unlike `cutWav`, the source here is the
+ * compressed downloaded audio, not an already-PCM WAV). Paths are relative to
+ * `cwd`.
+ */
+export async function cutAudioSegment(ffmpeg: string, cwd: string, input: string, start: number, duration: number, output: string, signal: AbortSignal): Promise<void> {
+  await runTool(
+    ffmpeg,
+    ['-hide_banner', '-nostdin', '-v', 'error', '-y', '-ss', start.toFixed(3), '-t', duration.toFixed(3), '-i', input, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', output],
+    { cwd, signal }
+  )
+}
+
 /** Mono 8 kHz float PCM of [start, start+duration] of a file. */
 export async function extractPcm(ffmpeg: string, file: string, start: number, duration: number, signal?: AbortSignal): Promise<Buffer> {
   const { stdout } = await runToolBinary(ffmpeg, ['-hide_banner', '-nostdin', '-v', 'error', '-ss', start.toFixed(3), '-t', duration.toFixed(3), '-i', file, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], signal)

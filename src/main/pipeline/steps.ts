@@ -1,6 +1,7 @@
-// The six pipeline steps. Each one is idempotent: it checks what is already on
-// disk and continues from there, so a crash or reboot loses at most a little
-// work (one transcription chunk, one clip download).
+// The seven pipeline steps. Each one is idempotent: it checks what is already
+// on disk and continues from there, so a crash or reboot loses at most a
+// little work (one transcription chunk, one clip's captions, one clip
+// download).
 
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -9,9 +10,11 @@ import { randomUUID } from 'node:crypto'
 import type { Clip, HardwareProfile, JobSummary, MomentSource, Range, StepId, VodInfo, Word } from '@shared/types'
 import { DEFAULT_CAPTION_STYLE, isCaptionStyleId } from '@shared/captionStyles'
 import { chatIn } from '@shared/chatOverlay'
+import { needsClipCaptionPass } from '@shared/hardware'
 import { isStretchedWord, repairWordTimings } from '@shared/wordTiming'
 import { bestLag, envelope, pcm16ToFloat } from '../core/align'
 import { parseChatLog } from '../core/chat'
+import { clipCaptionRange, resolveClipCaptionWords, shouldSkipClipCaptions } from '../core/clipCaptions'
 import {
   ANSWER_SCHEMA,
   buildPrompt,
@@ -28,7 +31,7 @@ import {
   type Excerpt,
   type Refined
 } from '../core/llmPrompt'
-import { clipFacts } from '../core/clipFacts'
+import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
 import { fallbackTitle, findCandidates, maxClipCount, MIN_CLIPS, scoreToStrength, selectByQuality, type Candidate } from '../core/moments'
 import { pickStructure } from '../core/structurePick'
@@ -44,7 +47,7 @@ import { CancelledError, UserError, isCancelled, throwIfAborted } from '../util/
 import type { Logger } from '../util/log'
 import { downloadChat, LlamaServer, whisperChunk } from './ai'
 import type { GpuLock } from './gpuLock'
-import { cutWav, extractPcm, fetchMutedRanges, prepareAudio, probeMedia, silentRanges } from './media'
+import { cutAudioSegment, cutWav, extractPcm, fetchMutedRanges, prepareAudio, probeMedia, silentRanges } from './media'
 import { downloadAudio, downloadSection, fetchVodMeta } from './ytdlp'
 
 export interface StepContext {
@@ -606,6 +609,108 @@ async function scanTranscript(
   return out
 }
 
+// ------------------------------------------------------------- clip captions
+
+/** Marks one clip's re-transcription attempt done (success or accepted fallback), so a crash resumes per clip, not from the top of the step. */
+function clipCaptionMarker(dir: string, clipId: string): string {
+  return join(dir, 'clipCaptions', `${clipId}.done`)
+}
+
+/**
+ * Re-transcribes each kept clip's own audio range with the large model,
+ * which is far too slow for the whole VOD on the CPU but easily affordable on
+ * a clip. NVIDIA machines already transcribed the whole VOD with the large
+ * model in the `transcribe` step, so there is nothing to sharpen here.
+ */
+async function clipCaptions(ctx: StepContext): Promise<void> {
+  if (!needsClipCaptionPass(ctx.hw)) return
+  const large = ctx.tools.path('model-whisper-large')
+  if (!large) {
+    ctx.log.warn('the sharper speech model is missing; keeping the fast-pass captions')
+    return
+  }
+  const fullAudio = findAudioFile(ctx.dir)
+  if (!fullAudio) {
+    ctx.log.warn('the VOD audio is gone; keeping the fast-pass captions')
+    return
+  }
+  const meta = await loadMeta(ctx.dir)
+  const duration = meta.vod.durationSec
+  const clips = ctx.store.clips(ctx.job.id).filter((c) => !shouldSkipClipCaptions(c))
+  if (clips.length === 0) return
+
+  const ffmpeg = ctx.tools.require('ffmpeg')
+  const cpu = ctx.tools.require('whisper-cpu')
+  const vad = ctx.tools.path('model-vad')
+  const root = ctx.paths.root
+  const rel = (p: string): string => relative(root, p)
+  const cpuThreads = Math.max(2, Math.min(8, ctx.hw.cpuThreads - 2))
+  const langFile = join(ctx.dir, 'transcript', 'language.txt')
+  const language = existsSync(langFile) ? (await readFile(langFile, 'utf8')).trim() || null : null
+  const outDir = join(ctx.dir, 'clipCaptions')
+  mkdirSync(outDir, { recursive: true })
+
+  let failures = 0
+  const release = await ctx.gpu.acquire(ctx.signal)
+  try {
+    for (let i = 0; i < clips.length; i++) {
+      throwIfAborted(ctx.signal)
+      const clip = clips[i]!
+      const marker = clipCaptionMarker(ctx.dir, clip.id)
+      if (existsSync(marker)) continue
+      const report = (f: number): void => ctx.progress((i + f) / clips.length, `Sharpening captions (clip ${i + 1} of ${clips.length})`)
+      report(0)
+      const range = clipCaptionRange(clip, duration, CLIP_PAD_SEC)
+      const wav = join(outDir, `${clip.id}.wav`)
+      const outBase = join(outDir, `${clip.id}.raw`)
+      try {
+        await cutAudioSegment(ffmpeg, root, rel(fullAudio), range.start, range.end - range.start, rel(wav), ctx.signal)
+        await whisperChunk({
+          whisper: cpu,
+          cwd: root,
+          model: rel(large),
+          vadModel: vad ? rel(vad) : null,
+          audio: rel(wav),
+          outBase: rel(outBase),
+          language,
+          threads: cpuThreads,
+          gpu: false,
+          beam: 1,
+          signal: ctx.signal,
+          onProgress: report
+        })
+        const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`))
+        let words = parsed.words
+        if (words.some((w) => isStretchedWord(w))) {
+          try {
+            const pcm = await extractPcm(ffmpeg, wav, 0, range.end - range.start, ctx.signal)
+            const env = envelope(pcm16ToFloat(pcm), 8000)
+            words = repairChunkWordTimings(words, env, 0.01)
+          } catch (err) {
+            if (isCancelled(err)) throw err
+            ctx.log.warn(`clip ${clip.id}: could not read a voice envelope for stretched words`, err)
+          }
+        }
+        const placed = placeChunkWords(words, range).words
+        const final = repairWordTimings(resolveClipCaptionWords(clip.words, placed))
+        ctx.store.saveClip({ ...clip, words: final, structureDecision: decideStructureHeuristically({ ...clip, words: final }, null, 0, clip.structureDecision) })
+      } catch (err) {
+        if (isCancelled(err)) throw err
+        failures++
+        ctx.log.warn(`clip ${clip.id}: re-transcription failed; keeping the fast-pass captions`, err)
+      } finally {
+        rmSync(wav, { force: true })
+        rmSync(`${outBase}.json`, { force: true })
+      }
+      writeFileSync(marker, '')
+      report(1)
+    }
+  } finally {
+    release()
+  }
+  if (clips.length > 0 && failures === clips.length) ctx.log.warn('could not sharpen captions for any clip; the fast-pass captions were kept')
+}
+
 // ---------------------------------------------------------------- clips
 
 async function clipsStep(ctx: StepContext): Promise<void> {
@@ -670,6 +775,7 @@ export const STEPS: Record<StepId, (ctx: StepContext) => Promise<void>> = {
   audio,
   transcribe,
   moments,
+  clipCaptions,
   clips: clipsStep
 }
 
