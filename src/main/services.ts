@@ -14,7 +14,8 @@ import { JobRunner } from './pipeline/runner'
 import { stemsAvailable } from './pipeline/stems'
 import { Store } from './store'
 import { detectHardware } from './tools/gpu'
-import { ARTIFACTS, BUNDLED_NOTICES } from './tools/manifest'
+import { shouldAutoFetchReplacement } from './tools/llmMigration'
+import { artifact, ARTIFACTS, BUNDLED_NOTICES } from './tools/manifest'
 import { ToolRegistry } from './tools/registry'
 import { SetupManager } from './tools/setup'
 import { Updater } from './updater'
@@ -43,7 +44,10 @@ export interface AppServices {
 }
 
 export function licenceNotices(): LicenceNotice[] {
-  const tools = ARTIFACTS.map((a) => ({ name: a.label, version: a.version, licence: a.licence.name, url: a.licence.url, note: a.licence.note ?? null }))
+  // Deprecated artifacts (e.g. the old Ministral 8B, replaced by Qwen3.5 9B)
+  // are kept in the manifest only so an existing install can be swapped out;
+  // they never appear as if they were still current.
+  const tools = ARTIFACTS.filter((a) => !a.deprecated).map((a) => ({ name: a.label, version: a.version, licence: a.licence.name, url: a.licence.url, note: a.licence.note ?? null }))
   const bundled = BUNDLED_NOTICES.map((b) => ({ ...b }))
   return [...tools, ...bundled]
 }
@@ -92,6 +96,12 @@ export async function createServices(resources: string, getWindow: () => Browser
   })
   const updater = new Updater((s) => sendEvent(getWindow(), 'app:update', s))
   setup.onChange((s) => sendEvent(getWindow(), 'setup:status', s))
+  setup.setInUseCheck(() => runner.hasWork() || exporter.hasWork() || bestOf.hasWork())
+  // A PC that already has the old language model from before the Qwen3.5 9B
+  // swap gets the new one fetched right away, no click needed; the old model
+  // keeps serving the moments step until the download is verified and
+  // installed (see tools/llmMigration.ts and SetupManager.retireLegacyLlm).
+  if (shouldAutoFetchReplacement(hardware, (id) => tools.isInstalled(artifact(id)))) void setup.start(['model-llm-9b'])
   const channelWatch = new ChannelWatchService({ store, tools, isReady: () => setup.isReady(), enqueueJob: (jobId) => runner.enqueue(jobId) })
   channelWatch.onChange((s) => sendEvent(getWindow(), 'channelWatch:changed', s))
   // Autostart's default follows the channel watch until the user picks explicitly.

@@ -48,7 +48,8 @@ describe('SetupManager', () => {
     const ids = s.components.map((c) => c.id)
     expect(ids).toContain('whisper-cuda')
     expect(ids).toContain('model-whisper-large')
-    expect(ids).toContain('model-llm-8b')
+    expect(ids).toContain('model-llm-9b')
+    expect(ids).not.toContain('model-llm-8b')
     expect(ids).not.toContain('model-llm-3b')
     expect(s.ready).toBe(false)
     expect(s.remainingBytes).toBeGreaterThan(6e9)
@@ -60,18 +61,18 @@ describe('SetupManager', () => {
     await m.start()
     expect(m.isReady()).toBe(true)
     expect(order[0]).toBe('model-vad')
-    expect(order[order.length - 1]).toBe('model-llm-8b')
+    expect(order[order.length - 1]).toBe('model-llm-9b')
     expect(order.indexOf('ffmpeg')).toBeLessThan(order.indexOf('model-whisper-large'))
   })
 
   it('is ready even if an optional part fails', async () => {
-    const { registry } = fakeRegistry({ fail: { 'model-llm-8b': new UserError('Could not reach the download server.') } })
+    const { registry } = fakeRegistry({ fail: { 'model-llm-9b': new UserError('Could not reach the download server.') } })
     const m = new SetupManager(registry, nvidia, 'C:\\x')
     await m.start()
     const s = await m.status()
     expect(s.ready).toBe(true)
     expect(s.error).toBeNull()
-    expect(s.components.find((c) => c.id === 'model-llm-8b')?.state).toBe('failed')
+    expect(s.components.find((c) => c.id === 'model-llm-9b')?.state).toBe('failed')
   })
 
   it('stops with one sentence if a required part fails', async () => {
@@ -104,8 +105,8 @@ describe('SetupManager', () => {
   it('start(only) downloads just the requested artifacts, leaving the rest alone', async () => {
     const { registry, order } = fakeRegistry()
     const m = new SetupManager(registry, nvidia, 'C:\\x')
-    await m.start(['llama', 'model-llm-8b'])
-    expect(order).toEqual(['llama', 'model-llm-8b'])
+    await m.start(['llama', 'model-llm-9b'])
+    expect(order).toEqual(['llama', 'model-llm-9b'])
     const s = await m.status()
     expect(s.components.find((c) => c.id === 'llama')?.state).toBe('ready')
     expect(s.components.find((c) => c.id === 'ffmpeg')?.state).toBe('missing')
@@ -116,26 +117,26 @@ describe('SetupManager', () => {
   it('start(only) skips artifacts already installed', async () => {
     const { registry, order } = fakeRegistry({ installed: ['llama'] })
     const m = new SetupManager(registry, nvidia, 'C:\\x')
-    await m.start(['llama', 'model-llm-8b'])
-    expect(order).toEqual(['model-llm-8b'])
+    await m.start(['llama', 'model-llm-9b'])
+    expect(order).toEqual(['model-llm-9b'])
   })
 
   it('remove() deletes an installed optional part and marks it missing again', async () => {
-    const { registry, removed } = fakeRegistry({ installed: ['llama', 'model-llm-8b'] })
+    const { registry, removed } = fakeRegistry({ installed: ['llama', 'model-llm-9b'] })
     const m = new SetupManager(registry, nvidia, 'C:\\x')
-    m.remove(['llama', 'model-llm-8b'])
-    expect(removed).toEqual(['llama', 'model-llm-8b'])
+    m.remove(['llama', 'model-llm-9b'])
+    expect(removed).toEqual(['llama', 'model-llm-9b'])
     const s = await m.status()
-    expect(s.components.find((c) => c.id === 'model-llm-8b')?.state).toBe('missing')
+    expect(s.components.find((c) => c.id === 'model-llm-9b')?.state).toBe('missing')
   })
 
   it('remove() refuses with one sentence while a job or export is using the part', async () => {
-    const { registry, removed } = fakeRegistry({ installed: ['llama', 'model-llm-8b'] })
+    const { registry, removed } = fakeRegistry({ installed: ['llama', 'model-llm-9b'] })
     const m = new SetupManager(registry, nvidia, 'C:\\x')
-    expect(() => m.remove(['llama', 'model-llm-8b'], () => true)).toThrow('Wait until the current job and exports finish.')
+    expect(() => m.remove(['llama', 'model-llm-9b'], () => true)).toThrow('Wait until the current job and exports finish.')
     expect(removed).toEqual([])
     const s = await m.status()
-    expect(s.components.find((c) => c.id === 'model-llm-8b')?.state).toBe('ready')
+    expect(s.components.find((c) => c.id === 'model-llm-9b')?.state).toBe('ready')
   })
 
   it('remove() proceeds when nothing is using the part', () => {
@@ -178,5 +179,35 @@ describe('SetupManager', () => {
     await new Promise((r) => setTimeout(r, 0))
     resolveInstall()
     await running
+  })
+
+  it('retires the old language model once the new one is verified installed', async () => {
+    const { registry, removed } = fakeRegistry({ installed: ['model-llm-8b'] })
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    await m.start(['model-llm-9b'])
+    expect(removed).toEqual(['model-llm-8b'])
+  })
+
+  it('leaves the old language model in place while a job or export is using it', async () => {
+    const { registry, removed } = fakeRegistry({ installed: ['model-llm-8b'] })
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    m.setInUseCheck(() => true)
+    await m.start(['model-llm-9b'])
+    expect(removed).toEqual([])
+  })
+
+  it('does not touch the old language model on a PC that cannot run the big tier', async () => {
+    const cpuOnly: HardwareProfile = { ...nvidia, llm: 'cpu' }
+    const { registry, removed } = fakeRegistry({ installed: ['model-llm-8b'] })
+    const m = new SetupManager(registry, cpuOnly, 'C:\\x')
+    await m.start(['model-llm-3b'])
+    expect(removed).toEqual([])
+  })
+
+  it('does nothing to the old model while the new one is still missing', async () => {
+    const { registry, removed } = fakeRegistry({ installed: ['model-llm-8b'], fail: { 'model-llm-9b': new UserError('Could not reach the download server.') } })
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    await m.start(['model-llm-9b'])
+    expect(removed).toEqual([])
   })
 })

@@ -6,6 +6,7 @@ import type { HardwareProfile, SetupComponent, SetupStatus } from '@shared/types
 import { EtaEstimator } from '../core/eta'
 import { isCancelled, UserError, userMessage } from '../util/errors'
 import { logger } from '../util/log'
+import { legacyLlmToRemove } from './llmMigration'
 import { artifact, neededArtifacts, type Artifact, type ToolId } from './manifest'
 import type { ToolRegistry } from './registry'
 
@@ -33,6 +34,8 @@ export class SetupManager {
   private free: number | null = null
   private listeners = new Set<(s: SetupStatus) => void>()
   private lastEmit = 0
+  /** Whether a job or export currently has an old model's file open; set once the rest of the app is wired up. */
+  private inUseCheck: (() => boolean) | undefined
 
   constructor(
     private readonly registry: ToolRegistry,
@@ -59,6 +62,11 @@ export class SetupManager {
   onChange(fn: (s: SetupStatus) => void): () => void {
     this.listeners.add(fn)
     return () => this.listeners.delete(fn)
+  }
+
+  /** Lets the rest of the app tell setup when a job or export is running, for the automatic old-model cleanup below. */
+  setInUseCheck(fn: () => boolean): void {
+    this.inUseCheck = fn
   }
 
   /** One component's state, for a settings screen that only cares about a few ids. */
@@ -183,6 +191,25 @@ export class SetupManager {
       this.controller = null
       this.free = await freeBytes(this.rootDir)
       this.emit(true)
+    }
+    this.retireLegacyLlm()
+  }
+
+  /**
+   * Once the hardware's current big-tier language model is confirmed
+   * installed, an older one left on disk from before a model swap (e.g.
+   * Ministral 3 8B -> Qwen3.5 9B) is no longer needed. Removes it the same
+   * way a manual "Remove" on the About screen would, guarded by the same
+   * inUse check; if a job or export still has it open, it is simply left for
+   * next time.
+   */
+  private retireLegacyLlm(): void {
+    const stale = legacyLlmToRemove(this.hardware, (id) => this.registry.isInstalled(artifact(id)))
+    if (stale.length === 0) return
+    try {
+      this.remove(stale, this.inUseCheck)
+    } catch (err) {
+      log.warn('could not retire the old language model yet', err)
     }
   }
 

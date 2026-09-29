@@ -181,10 +181,19 @@ time: `SetupManager.start(only)` and `.remove(only)` take a subset of artifact
 ids instead of everything the PC needs, so a single part can be fetched (or
 freed) without touching the rest. `shared/optionalModels.ts` (pure, shared with
 the renderer) groups the underlying tool/model artifacts into the two plain-
-language parts shown there and picks the 8B or 3B language model per
-`shared/hardware.ts`'s VRAM rule. The moments step only uses a model once
-`ToolRegistry.isInstalled` confirms its marker file and hash match, so a
-partial or cancelled download is never picked up half-done.
+language parts shown there and picks the 9B (Qwen3.5) or 3B (Ministral)
+language model per `shared/hardware.ts`'s VRAM rule. The moments step only
+uses a model once `ToolRegistry.isInstalled` confirms its marker file and
+hash match, so a partial or cancelled download is never picked up half-done.
+
+When a pinned model for a tier changes (e.g. the Ministral 3 8B -> Qwen3.5 9B
+swap), the old one is kept in the manifest as `deprecated`, needed by no
+hardware, so it is never fetched fresh but an existing install is still
+recognised. A PC that already has it gets the new one downloaded and verified
+automatically, no click needed (`services.ts`, `tools/llmMigration.ts`); the
+old model keeps the moments step running until that finishes, and
+`SetupManager` only removes it once the new one is confirmed installed, the
+same `remove()` guarded by whether a job or export still has it open.
 
 ## Tray and autostart
 
