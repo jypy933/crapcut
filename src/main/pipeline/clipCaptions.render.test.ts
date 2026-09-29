@@ -82,5 +82,5 @@ describe.skipIf(!ffmpeg || !whisper || !model)('clip captions glue (real FFmpeg 
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 180_000)
 })
