@@ -51,6 +51,11 @@ export type ClipPatch = z.infer<typeof ClipPatchSchema>
 
 export type CreateJobResult = { ok: true; jobId: string; existing: boolean } | { ok: false; reason: string }
 
+export interface WorkList {
+  exports: ExportItem[]
+  bestOf: BestOfItem[]
+}
+
 export type SetChannelWatchResult = { ok: true; channel: string } | { ok: false; reason: string }
 
 /** Request channels: name -> [input schema]. */
@@ -87,6 +92,7 @@ export const Invoke = {
   'bestOf:start': z.tuple([id]),
   'bestOf:cancel': z.tuple([id]),
   'bestOf:show': z.tuple([id]),
+  'work:list': z.tuple([]),
   'taste:status': z.tuple([]),
   'taste:reset': z.tuple([]),
   'channelWatch:status': z.tuple([]),
@@ -139,6 +145,8 @@ export interface InvokeResult {
   'bestOf:start': string
   'bestOf:cancel': void
   'bestOf:show': void
+  /** Every recent export and best-of build across all jobs, for the progress shown outside the review screen. */
+  'work:list': WorkList
   'taste:status': { tuned: boolean }
   'taste:reset': void,
   'channelWatch:status': ChannelWatchStatus

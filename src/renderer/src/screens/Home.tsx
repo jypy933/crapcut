@@ -1,11 +1,14 @@
 import { AlertCircle, ArrowRight, Pause, Play, Radio, RotateCcw, Trash2, X } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { formatClock, formatEta } from '@shared/format'
+import { jobStepLine, summarizeWork, workLabel } from '@shared/progress'
 import { STEP_IDS, STEP_LABELS, type ChannelWatchStatus, type JobSummary } from '@shared/types'
 import { parseVodUrl } from '@shared/vodUrl'
 import type { Route } from '../App'
 import { call, errorText, useEvent } from '../api'
 import { Spinner } from '../components/ui'
+import { WorkLine } from '../components/WorkLine'
+import { hasActiveWork, seen, useNow, type Work } from '../lib/work'
 
 function upsert(list: JobSummary[], job: JobSummary): JobSummary[] {
   const i = list.findIndex((j) => j.id === job.id)
@@ -15,7 +18,7 @@ function upsert(list: JobSummary[], job: JobSummary): JobSummary[] {
   return next
 }
 
-export function Home({ go }: { go: (r: Route) => void }): ReactNode {
+export function Home({ go, work }: { go: (r: Route) => void; work: Work }): ReactNode {
   const [jobs, setJobs] = useState<JobSummary[] | null>(null)
   const [link, setLink] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -25,6 +28,8 @@ export function Home({ go }: { go: (r: Route) => void }): ReactNode {
     void call('jobs:list').then(setJobs)
   }, [])
   useEvent('jobs:changed', (job) => setJobs((l) => (l ? upsert(l, job) : [job])))
+  // A slow clock, only while something runs, so a time left that stopped updating drops away.
+  const now = useNow(!!jobs?.some((j) => j.status === 'running') || hasActiveWork(work))
 
   async function submit(e: FormEvent): Promise<void> {
     e.preventDefault()
@@ -98,7 +103,7 @@ export function Home({ go }: { go: (r: Route) => void }): ReactNode {
       {jobs && jobs.length > 0 && (
         <div className="jobs">
           {jobs.map((j) => (
-            <JobCard key={j.id} job={j} go={go} />
+            <JobCard key={j.id} job={j} go={go} now={now} work={{ exports: work.exports.filter((e) => e.jobId === j.id), bestOf: work.bestOf.filter((b) => b.jobId === j.id), seenAt: work.seenAt }} />
           ))}
         </div>
       )}
@@ -187,7 +192,7 @@ function ChannelWatch(): ReactNode {
   )
 }
 
-function statusLine(job: JobSummary): ReactNode {
+function statusLine(job: JobSummary, now: number): ReactNode {
   const step = job.currentStep
   switch (job.status) {
     case 'review':
@@ -200,32 +205,39 @@ function statusLine(job: JobSummary): ReactNode {
         </span>
       )
     case 'paused':
-      return <span className="muted">Paused{step ? ` · ${STEP_LABELS[step].toLowerCase()}` : ''}</span>
+      return (
+        <span className="muted">
+          Paused{step ? ` · ${STEP_LABELS[step].toLowerCase()}` : ''}
+          {step && job.steps[step].progress > 0.005 ? ` · ${Math.round(job.steps[step].progress * 100)}%` : ''}
+        </span>
+      )
     case 'cancelled':
       return <span className="faint">Stopped</span>
     case 'queued':
       return <span className="muted">Waiting for the job before it...</span>
     case 'running': {
-      if (!step) return <span className="muted">Finishing...</span>
-      const s = job.steps[step]
-      const eta = formatEta(s.etaSec)
+      const line = jobStepLine(job, now)
+      if (!line) return <span className="muted">Finishing...</span>
+      const eta = formatEta(line.etaSec)
       return (
         <span className="muted">
-          {STEP_LABELS[step]}
-          {s.progress > 0.005 ? ` · ${Math.round(s.progress * 100)}%` : ''}
+          {line.step}
+          {line.percent !== null ? ` · ${line.percent}%` : ''}
           {eta ? ` · ${eta} left` : ''}
-          {s.detail ? <span className="faint"> · {s.detail}</span> : null}
+          {line.detail ? <span className="faint"> · {line.detail}</span> : null}
         </span>
       )
     }
   }
 }
 
-function JobCard({ job, go }: { job: JobSummary; go: (r: Route) => void }): ReactNode {
+function JobCard({ job, go, now, work }: { job: JobSummary; go: (r: Route) => void; now: number; work: Work }): ReactNode {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const title = job.vod?.title ?? `Twitch VOD ${job.vodId}`
   const sub = job.vod ? `${job.vod.channel} · ${formatClock(job.vod.durationSec)}` : 'Reading the VOD...'
   const running = job.status === 'running' || job.status === 'queued'
+  const exporting = summarizeWork(seen(work.exports, work.seenAt), now)
+  const building = summarizeWork(seen(work.bestOf, work.seenAt), now)
 
   return (
     <div className="card job">
@@ -286,7 +298,17 @@ function JobCard({ job, go }: { job: JobSummary; go: (r: Route) => void }): Reac
           })}
         </div>
       )}
-      <div className="small">{statusLine(job)}</div>
+      <div className="small">{statusLine(job, now)}</div>
+      {exporting && (
+        <WorkLine
+          label={workLabel('export', exporting)}
+          fraction={exporting.fraction}
+          etaSec={exporting.etaSec}
+          started={exporting.running > 0}
+          note={exporting.failed ? `${exporting.failed} could not be exported` : null}
+        />
+      )}
+      {building && <WorkLine label={workLabel('bestOf', building)} fraction={building.fraction} etaSec={building.etaSec} started={building.running > 0} />}
       {confirmDelete && <div className="small faint">Deletes this job's downloads and clips from CrapCut. Exported videos stay in your Videos folder.</div>}
     </div>
   )

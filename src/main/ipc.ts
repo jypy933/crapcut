@@ -121,6 +121,13 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
       if (item?.file && existsSync(item.file)) shell.showItemInFolder(item.file)
     },
 
+    'work:list': () => {
+      // Recent ones only: enough to see the batch under way and how much of it is done.
+      const since = Date.now() - 24 * 3600 * 1000
+      const recent = <T extends { status: string; createdAt: number }>(items: T[]): T[] => items.filter((i) => i.status === 'queued' || i.status === 'running' || i.createdAt >= since)
+      return { exports: recent(exporter.list()), bestOf: recent(bestOf.list()) }
+    },
+
     'taste:status': () => ({ tuned: hasEnoughHistory(store.getTasteHistory()) }),
     'taste:reset': () => store.clearTasteHistory(),
     'channelWatch:status': () => channelWatch.status(),

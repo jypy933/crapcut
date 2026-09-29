@@ -33,6 +33,7 @@ export const INVOKE_CHANNELS = [
   'bestOf:start',
   'bestOf:cancel',
   'bestOf:show',
+  'work:list',
   'taste:status',
   'taste:reset',
   'channelWatch:status',

@@ -125,7 +125,7 @@ const jobs: JobSummary[] = [
     vod: { ...vod, id: '2883000001', title: 'Just chatting + new game day', durationSec: 3 * 3600 + 400 },
     status: 'running',
     currentStep: 'transcribe',
-    steps: { ...allDone(), transcribe: step('running', 0.37, 780), moments: step('pending'), clips: step('pending') },
+    steps: { ...allDone(), transcribe: step('running', 0.37, 780, 'Part 5 of 12'), moments: step('pending'), clips: step('pending') },
     error: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -141,6 +141,32 @@ const jobs: JobSummary[] = [
     steps: { ...allDone(), audio: step('failed', 0.2), transcribe: step('pending'), moments: step('pending'), clips: step('pending') },
     error: 'Could not reach Twitch. Check your internet connection.',
     createdAt: Date.now(),
+    updatedAt: Date.now(),
+    clipCount: 0
+  },
+  {
+    id: 'job-aaaaaa04',
+    url: 'https://www.twitch.tv/videos/2880000003',
+    vodId: '2880000003',
+    vod: { ...vod, id: '2880000003', title: 'Community game night', durationSec: 4 * 3600 + 900 },
+    status: 'running',
+    currentStep: 'clipCaptions',
+    steps: { ...allDone(), clipCaptions: step('running', 0.25, 95, 'Clip 3 of 12'), clips: step('pending') },
+    error: null,
+    createdAt: Date.now() - 1000,
+    updatedAt: Date.now(),
+    clipCount: 12
+  },
+  {
+    id: 'job-aaaaaa05',
+    url: 'https://www.twitch.tv/videos/2879000004',
+    vodId: '2879000004',
+    vod: { ...vod, id: '2879000004', title: 'Waiting in line', durationSec: 2 * 3600 + 60 },
+    status: 'queued',
+    currentStep: 'metadata',
+    steps: { ...allDone(), metadata: step('pending'), chat: step('pending'), audio: step('pending'), transcribe: step('pending'), moments: step('pending'), clipCaptions: step('pending'), clips: step('pending') },
+    error: null,
+    createdAt: Date.now() - 2000,
     updatedAt: Date.now(),
     clipCount: 0
   }
@@ -231,6 +257,49 @@ clips.push({
 let layouts: Layout[] = []
 let exports: ExportItem[] = []
 let bestOf: BestOfItem[] = []
+
+// `?work=1` seeds a batch of exports and a best-of build on the first job (the
+// one in review) and lets every running thing creep forward, so the progress
+// lines, the title-bar pill and the "time left" hiding can be seen moving.
+if (params.get('work') === '1') {
+  const now = Date.now()
+  const item = (n: number, status: ExportItem['status'], progress: number, etaSec: number | null): ExportItem => ({ id: `exp-seed000${n}`, jobId: 'job-aaaaaa01', clipId: `clip-bbbbbb0${n}`, format: 'vertical', status, progress, etaSec, file: null, error: null, createdAt: now })
+  exports = [item(0, 'done', 1, null), item(1, 'running', 0.45, 75), item(2, 'queued', 0, null), item(3, 'queued', 0, null)]
+  bestOf = [{ id: 'bestof-seed0001', jobId: 'job-aaaaaa01', status: 'running', progress: 0.3, etaSec: 40, file: null, error: null, createdAt: now }]
+}
+
+// Jobs always creep forward a little so their status line stays fresh.
+setInterval(() => {
+  const now = Date.now()
+  for (const j of jobs) {
+    if (j.status !== 'running' || !j.currentStep) continue
+    const st = j.steps[j.currentStep]
+    st.progress = Math.min(0.99, st.progress + 0.004)
+    j.updatedAt = now
+    emit('jobs:changed', { ...j })
+  }
+  if (params.get('work') !== '1') return
+  for (const e of exports) {
+    if (e.status !== 'running') continue
+    e.progress = Math.min(1, e.progress + 0.03)
+    e.etaSec = Math.max(0, Math.round((1 - e.progress) * 40))
+    if (e.progress >= 1) {
+      e.status = 'done'
+      e.etaSec = null
+      const next = exports.find((x) => x.status === 'queued')
+      if (next) next.status = 'running'
+      if (next) emit('exports:changed', { ...next })
+    }
+    emit('exports:changed', { ...e })
+  }
+  for (const b of bestOf) {
+    if (b.status !== 'running') continue
+    b.progress = Math.min(1, b.progress + 0.02)
+    b.etaSec = Math.max(0, Math.round((1 - b.progress) * 50))
+    if (b.progress >= 1) (b.status = 'done', (b.etaSec = null))
+    emit('bestOf:changed', { ...b })
+  }
+}, 1000)
 let channelWatch: ChannelWatchStatus = { channel: null, enabledAt: null, checking: false, lastCheckedAt: null, lastError: null }
 let autostart: AutostartStatus = { enabled: false, userSet: false }
 
@@ -273,7 +342,8 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
     layouts = [l, ...layouts.filter((x) => x.id !== l.id)]
     return l
   },
-  'exports:list': () => exports,
+  'exports:list': (jobId: string) => exports.filter((e) => e.jobId === jobId),
+  'work:list': () => ({ exports, bestOf }),
   'exports:start': (jobId: string, ids: string[]) => {
     exports = ids.map((clipId, i) => ({ id: `exp-cccccc0${i}`, jobId, clipId, format: 'vertical', status: i ? 'queued' : 'running', progress: 0.35, etaSec: 40, file: null, error: null, createdAt: Date.now() }))
     for (const e of exports) emit('exports:changed', e)

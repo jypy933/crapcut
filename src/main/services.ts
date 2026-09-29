@@ -4,6 +4,7 @@ import { app, Notification, type BrowserWindow } from 'electron'
 import type { AppInfo, HardwareProfile, LicenceNotice } from '@shared/types'
 import { AutostartManager } from './autostart'
 import { ChannelWatchService } from './channelWatch'
+import { taskbarState } from './core/taskbar'
 import { sendEvent } from './ipc'
 import { resolvePaths, type AppPaths } from './paths'
 import { AutoEditPreviewService } from './pipeline/autoEditPreview'
@@ -76,8 +77,23 @@ export async function createServices(
   // hardware encoder session.
   const encodeLock = new GpuLock()
 
+  // The taskbar button follows whatever is running (jobs, exports, best-of
+  // builds). The runners are created below; this only runs once they exist.
+  const refreshTaskbar = (): void => {
+    const win = getWindow()
+    if (!win || win.isDestroyed()) return
+    const busy = runner.hasWork() || exporter.hasWork() || bestOf.hasWork()
+    const state = busy ? taskbarState({ jobs: runner.hasWork() ? store.jobs() : [], exports: exporter.list(), bestOf: bestOf.list() }) : { mode: 'none' as const }
+    if (state.mode === 'none') win.setProgressBar(-1)
+    else if (state.mode === 'indeterminate') win.setProgressBar(2, { mode: 'indeterminate' })
+    else win.setProgressBar(state.value, { mode: 'normal' })
+  }
+
   const runner = new JobRunner(store, paths, tools, () => hardware, gpu, {
-    onJobChanged: (job) => sendEvent(getWindow(), 'jobs:changed', job),
+    onJobChanged: (job) => {
+      sendEvent(getWindow(), 'jobs:changed', job)
+      refreshTaskbar()
+    },
     onJobReady: (job) => {
       const win = getWindow()
       if (Notification.isSupported() && (!win || !win.isFocused())) {
@@ -96,10 +112,16 @@ export async function createServices(
     }
   })
   const exporter = new Exporter(store, paths, tools, () => hardware, gpu, encodeLock, {
-    onChanged: (item) => sendEvent(getWindow(), 'exports:changed', item)
+    onChanged: (item) => {
+      sendEvent(getWindow(), 'exports:changed', item)
+      refreshTaskbar()
+    }
   })
   const bestOf = new BestOfBuilder(store, paths, tools, exporter, encodeLock, {
-    onChanged: (item) => sendEvent(getWindow(), 'bestOf:changed', item)
+    onChanged: (item) => {
+      sendEvent(getWindow(), 'bestOf:changed', item)
+      refreshTaskbar()
+    }
   })
   const autoEditPreview = new AutoEditPreviewService(store, paths, tools, {
     onChanged: (state) => sendEvent(getWindow(), 'autoEditPreview:changed', state)

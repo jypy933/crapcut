@@ -145,7 +145,7 @@ async function audio(ctx: StepContext): Promise<void> {
 
   let src = findAudioFile(ctx.dir)
   if (!src) {
-    await downloadAudio(ctx.tools.require('yt-dlp'), ffmpeg, ctx.job.url, join(ctx.dir, 'audio.%(ext)s'), ctx.signal, (f) => ctx.progress(f * 0.8, 'Downloading'))
+    await downloadAudio(ctx.tools.require('yt-dlp'), ffmpeg, ctx.job.url, join(ctx.dir, 'audio.%(ext)s'), ctx.signal, (f) => ctx.progress(f * 0.8, null))
     src = findAudioFile(ctx.dir)
     if (!src) throw new UserError('The audio download did not produce a file. Try again.')
   }
@@ -234,7 +234,8 @@ async function transcribe(ctx: StepContext): Promise<void> {
       if (await chunkDone(done)) continue
       const overallBase = i / chunks.length
       let onGpu = useGpu
-      const report = (f: number): void => ctx.progress(overallBase + f / chunks.length, onGpu ? null : 'Using the processor (slower)')
+      const part = chunks.length > 1 ? `Part ${i + 1} of ${chunks.length}` : null
+      const report = (f: number): void => ctx.progress(overallBase + f / chunks.length, onGpu ? part : [part, 'using the processor (slower)'].filter(Boolean).join(' · '))
       report(0)
       // Skip chunks that are entirely muted.
       const mutedSec = muted.reduce((s, m) => s + Math.max(0, Math.min(chunk.end, m.end) - Math.max(chunk.start, m.start)), 0)
@@ -806,7 +807,7 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
       const clip = clips[i]!
       const marker = clipCaptionMarker(ctx.dir, clip.id)
       if (existsSync(marker)) continue
-      const report = (f: number): void => ctx.progress((i + f) / clips.length, `Sharpening captions (clip ${i + 1} of ${clips.length})`)
+      const report = (f: number): void => ctx.progress((i + f) / clips.length, `Clip ${i + 1} of ${clips.length}`)
       report(0)
       const range = clipCaptionRange(clip, duration, CLIP_PAD_SEC)
       const wav = join(outDir, `${clip.id}.wav`)

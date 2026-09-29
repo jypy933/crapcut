@@ -2,6 +2,8 @@ import { Scissors } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { SetupStatus, UpdateState } from '@shared/types'
 import { call, useEvent } from './api'
+import { WorkIndicator } from './components/WorkIndicator'
+import { useWork } from './lib/work'
 import { About } from './screens/About'
 import { Home } from './screens/Home'
 import { Review } from './screens/Review'
@@ -13,6 +15,7 @@ export function App(): ReactNode {
   const [route, setRoute] = useState<Route>({ name: 'home' })
   const [setup, setSetup] = useState<SetupStatus | null>(null)
   const [update, setUpdate] = useState<UpdateState>({ kind: 'idle' })
+  const work = useWork()
 
   useEffect(() => {
     void call('setup:status').then(setSetup)
@@ -29,7 +32,7 @@ export function App(): ReactNode {
   else if (!setup) body = null
   else if (!setup.ready) body = <Setup status={setup} />
   else if (route.name === 'review') body = <Review key={route.jobId} jobId={route.jobId} go={go} />
-  else body = <Home go={go} />
+  else body = <Home go={go} work={work} />
 
   return (
     <div className="shell">
@@ -49,6 +52,7 @@ export function App(): ReactNode {
           </button>
         </nav>
         <div className="spacer" />
+        {setup?.ready && <WorkIndicator work={work} go={go} />}
         {update.kind === 'ready' && (
           <button type="button" className="btn sm primary no-drag" onClick={() => void call('app:installUpdate')}>
             Restart to update

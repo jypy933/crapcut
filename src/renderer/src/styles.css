@@ -540,7 +540,7 @@ kbd {
 }
 .steps {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   gap: 4px;
 }
 .steps > div {
@@ -559,6 +559,36 @@ kbd {
 }
 .steps > div.failed {
   background: var(--bad-soft);
+}
+
+.work-line {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.work-line .bar {
+  height: 3px;
+}
+
+/* Title-bar pill shown on every screen while exports or a best-of build run. */
+.work-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 200px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: none;
+  background: var(--panel-2);
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+}
+.work-pill:hover {
+  background: var(--panel-3);
+}
+.work-pill .bar {
+  height: 3px;
 }
 
 .empty {
