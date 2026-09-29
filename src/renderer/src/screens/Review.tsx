@@ -332,6 +332,9 @@ function Inspector({
   useEffect(() => setTitle(clip.title), [clip.id, clip.title])
   const groups = useMemo(() => groupWords(clipWords(clip.words, clip.start, clip.end)), [clip.words, clip.start, clip.end])
   const edited = clip.start !== clip.suggested.start || clip.end !== clip.suggested.end
+  // A clip saved before the chat overlay existed has neither field yet (main
+  // normalises on read, but this stays cheap insurance).
+  const chatMessages = clip.chatMessages ?? []
 
   return (
     <aside className="inspector">
@@ -418,14 +421,14 @@ function Inspector({
         label="Chat"
         right={
           <Toggle
-            on={clip.chatOverlay}
+            on={clip.chatOverlay ?? false}
             label="Chat"
-            disabled={clip.chatMessages.length === 0}
+            disabled={chatMessages.length === 0}
             onChange={(chatOverlay) => onUpdate({ chatOverlay })}
           />
         }
       >
-        {clip.chatMessages.length === 0 && <div className="small faint">No chat in this clip's time range.</div>}
+        {chatMessages.length === 0 && <div className="small faint">No chat in this clip's time range.</div>}
       </Field>
 
       <Field label="Audio">

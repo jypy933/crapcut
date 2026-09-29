@@ -121,15 +121,18 @@ export function Preview({ clip, src, layout, format, videoRef, time, onTime, onP
   const strokePx = style.box ? 0 : size.h * (format === 'vertical' ? (7 * 2) / 1920 : (6 * 2) / 1080) * style.outlineScale
 
   // Chat overlay: an approximation of the burned-in look, same placement logic.
+  // A clip saved before the chat overlay existed has neither field yet (main
+  // normalises on read, but this stays cheap insurance).
+  const chatMessages = clip.chatMessages ?? []
   const out = OUTPUT_SIZE[format]
   const captionYForChat = clip.captions.enabled ? (format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1))) : null
   const chatGeometry = useMemo(
-    () => (clip.chatOverlay && clip.chatMessages.length > 0 ? chatOverlayGeometry(format, layout, naturalSize, captionYForChat) : null),
-    [clip.chatOverlay, clip.chatMessages.length, format, layout, naturalSize, captionYForChat]
+    () => ((clip.chatOverlay ?? false) && chatMessages.length > 0 ? chatOverlayGeometry(format, layout, naturalSize, captionYForChat) : null),
+    [clip.chatOverlay, chatMessages.length, format, layout, naturalSize, captionYForChat]
   )
   const chatLines = useMemo(
-    () => (chatGeometry ? buildChatOverlay(clip.chatMessages, clip.start, clip.end, chatGeometry) : []),
-    [chatGeometry, clip.chatMessages, clip.start, clip.end]
+    () => (chatGeometry ? buildChatOverlay(chatMessages, clip.start, clip.end, chatGeometry) : []),
+    [chatGeometry, chatMessages, clip.start, clip.end]
   )
   const chatNow = time - clip.start
   const activeChat = chatLines.filter((l) => chatNow >= l.start && chatNow < l.end)
