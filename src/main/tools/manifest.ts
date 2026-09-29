@@ -2,7 +2,7 @@
 // and SHA-256. Nothing here is bundled in the installer. To update a tool,
 // change its entry (url, sha256, size) and ship a new app release.
 
-import { canRunBigLlm, LLM_8B_MIN_VRAM_MB } from '@shared/hardware'
+import { canRunBigLlm, LLM_BIG_MIN_VRAM_MB } from '@shared/hardware'
 import type { HardwareProfile } from '@shared/types'
 
 export type ToolId =
@@ -15,6 +15,7 @@ export type ToolId =
   | 'model-whisper-large'
   | 'model-whisper-small'
   | 'model-vad'
+  | 'model-llm-9b'
   | 'model-llm-8b'
   | 'model-llm-3b'
   | 'separator'
@@ -44,12 +45,20 @@ export interface Artifact {
   optional: boolean
   /** Whether this machine needs it. */
   needed: (hw: HardwareProfile) => boolean
+  /**
+   * Retired by a newer pinned artifact for the same role (e.g. the Ministral
+   * 8B language model, replaced by Qwen3.5 9B). Kept in this list only so an
+   * existing install can still be found, used as a fallback and cleanly
+   * swapped out (see `tools/llmMigration.ts`); never downloaded fresh and
+   * left out of the About screen's licence list.
+   */
+  deprecated?: boolean
 }
 
 const GH = 'https://github.com'
 const HF = 'https://huggingface.co'
 
-export { LLM_8B_MIN_VRAM_MB }
+export { LLM_BIG_MIN_VRAM_MB }
 
 export const ARTIFACTS: readonly Artifact[] = [
   {
@@ -180,6 +189,21 @@ export const ARTIFACTS: readonly Artifact[] = [
     needed: () => true
   },
   {
+    id: 'model-llm-9b',
+    label: 'Language model (Qwen3.5 9B)',
+    version: 'Q4_K_M-3885219',
+    // No official GGUF from the Qwen org for this size (only safetensors at
+    // huggingface.co/Qwen/Qwen3.5-9B); unsloth's is the pinned quantization.
+    url: `${HF}/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf`,
+    sha256: '03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8',
+    size: 5680522464,
+    kind: 'file',
+    entry: 'Qwen3.5-9B-Q4_K_M.gguf',
+    licence: { name: 'Apache-2.0', url: 'https://huggingface.co/Qwen/Qwen3.5-9B', note: 'unsloth GGUF quantization of the official Qwen weights' },
+    optional: true,
+    needed: (hw) => canRunBigLlm(hw)
+  },
+  {
     id: 'model-llm-8b',
     label: 'Language model (Ministral 3 8B)',
     version: '2512-Q4_K_M',
@@ -190,7 +214,11 @@ export const ARTIFACTS: readonly Artifact[] = [
     entry: 'Ministral-3-8B-Instruct-2512-Q4_K_M.gguf',
     licence: { name: 'Apache-2.0', url: 'https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF' },
     optional: true,
-    needed: (hw) => canRunBigLlm(hw)
+    // Replaced by model-llm-9b (Qwen3.5 9B rated much better in testing at
+    // the same speed): never fetched fresh, only recognised so an existing
+    // install can keep working until the new model is downloaded.
+    needed: () => false,
+    deprecated: true
   },
   {
     id: 'model-llm-3b',

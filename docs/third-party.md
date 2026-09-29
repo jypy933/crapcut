@@ -18,7 +18,7 @@ pinned to the exact version, and checked against the SHA-256 in
 | llama.cpp (Vulkan build) | b11236 | MIT | https://github.com/ggml-org/llama.cpp/releases/tag/b11236 |
 | Whisper large-v3-turbo (q8_0, GPU) or small (q8_0, CPU) | ggml | MIT (OpenAI Whisper) | https://huggingface.co/ggerganov/whisper.cpp |
 | Silero VAD | 6.2.0 | MIT | https://huggingface.co/ggml-org/whisper-vad |
-| Ministral 3 8B Instruct 2512 (Q4_K_M), or 3B on smaller GPUs | 2512 | Apache-2.0 | https://huggingface.co/mistralai |
+| Qwen3.5 9B (Q4_K_M, unsloth GGUF build; no official GGUF from the Qwen org yet), or Ministral 3 3B Instruct 2512 (Q4_K_M) on smaller GPUs | Q4_K_M | Apache-2.0 | https://huggingface.co/Qwen/Qwen3.5-9B (weights), https://huggingface.co/unsloth/Qwen3.5-9B-GGUF (quantization); https://huggingface.co/mistralai (3B) |
 | Voice separator: CrapCut's driver on demucs.cpp (includes Eigen, MPL-2.0, and libnyquist, BSD-2-Clause), built by this repo's CI ([separator.yml](../.github/workflows/separator.yml)) | tools-separator-1 | MIT | https://github.com/jypy933/crapcut/releases/tag/tools-separator-1 |
 | Demucs htdemucs weights (Meta), converted to ggml by the same CI job | htdemucs-4s-f16 | MIT | https://github.com/facebookresearch/demucs |
 
