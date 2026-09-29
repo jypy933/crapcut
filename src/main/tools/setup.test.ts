@@ -17,6 +17,7 @@ const nvidia: HardwareProfile = {
 function fakeRegistry(opts: { installed?: string[]; fail?: Record<string, Error> } = {}) {
   const installed = new Set(opts.installed ?? [])
   const order: string[] = []
+  const removed: string[] = []
   const registry = {
     isInstalled: (a: Artifact) => installed.has(a.id),
     partialBytes: () => 0,
@@ -26,9 +27,13 @@ function fakeRegistry(opts: { installed?: string[]; fail?: Record<string, Error>
       onProgress({ phase: 'downloading', bytes: a.size / 2 })
       onProgress({ phase: 'verifying', bytes: a.size })
       installed.add(a.id)
+    }),
+    remove: vi.fn((a: Artifact) => {
+      removed.push(a.id)
+      installed.delete(a.id)
     })
   }
-  return { registry: registry as unknown as ToolRegistry, order, installed }
+  return { registry: registry as unknown as ToolRegistry, order, installed, removed }
 }
 
 vi.mock('node:fs/promises', async (orig) => {
@@ -94,5 +99,52 @@ describe('SetupManager', () => {
     const all = new SetupManager(registry, nvidia, 'C:\\x').artifacts().map((a) => a.id)
     const { registry: full } = fakeRegistry({ installed: all })
     expect(new SetupManager(full, nvidia, 'C:\\x').isReady()).toBe(true)
+  })
+
+  it('start(only) downloads just the requested artifacts, leaving the rest alone', async () => {
+    const { registry, order } = fakeRegistry()
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    await m.start(['llama', 'model-llm-8b'])
+    expect(order).toEqual(['llama', 'model-llm-8b'])
+    const s = await m.status()
+    expect(s.components.find((c) => c.id === 'llama')?.state).toBe('ready')
+    expect(s.components.find((c) => c.id === 'ffmpeg')?.state).toBe('missing')
+    // The required tools are still missing, so the app is not "ready" from this alone.
+    expect(s.ready).toBe(false)
+  })
+
+  it('start(only) skips artifacts already installed', async () => {
+    const { registry, order } = fakeRegistry({ installed: ['llama'] })
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    await m.start(['llama', 'model-llm-8b'])
+    expect(order).toEqual(['model-llm-8b'])
+  })
+
+  it('remove() deletes an installed optional part and marks it missing again', async () => {
+    const { registry, removed } = fakeRegistry({ installed: ['llama', 'model-llm-8b'] })
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    m.remove(['llama', 'model-llm-8b'])
+    expect(removed).toEqual(['llama', 'model-llm-8b'])
+    const s = await m.status()
+    expect(s.components.find((c) => c.id === 'model-llm-8b')?.state).toBe('missing')
+  })
+
+  it('remove() does nothing while a download is running', async () => {
+    let resolveInstall: () => void = () => {}
+    const registry = {
+      isInstalled: () => false,
+      partialBytes: () => 0,
+      install: vi.fn(() => new Promise<void>((resolve) => (resolveInstall = resolve))),
+      remove: vi.fn()
+    } as unknown as ToolRegistry
+    const m = new SetupManager(registry, nvidia, 'C:\\x')
+    const running = m.start(['llama'])
+    m.remove(['llama'])
+    expect((registry as unknown as { remove: ReturnType<typeof vi.fn> }).remove).not.toHaveBeenCalled()
+    // Let start()'s pending disk-space check settle so it reaches registry.install
+    // and captures the real resolver, then let the (fake) install finish.
+    await new Promise((r) => setTimeout(r, 0))
+    resolveInstall()
+    await running
   })
 })

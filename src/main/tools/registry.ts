@@ -108,6 +108,15 @@ export class ToolRegistry {
     }
   }
 
+  /** Deletes an installed (or partially downloaded) artifact to free space. */
+  remove(a: Artifact): void {
+    rmSync(this.installDir(a), { recursive: true, force: true })
+    const ext = a.kind === 'zip' ? '.zip' : '.bin'
+    const file = join(this.downloadsDir, `${a.id}-${a.version}${ext}`)
+    rmSync(file, { force: true })
+    rmSync(`${file}.part`, { force: true })
+  }
+
   /** Bytes already downloaded for an artifact (a resumable part file). */
   partialBytes(a: Artifact): number {
     const ext = a.kind === 'zip' ? '.zip' : '.bin'
