@@ -60,6 +60,39 @@ export interface PromptContext {
   chapter: string | null
 }
 
+/**
+ * Two short worked examples, one kept and one skipped, shown before the real
+ * excerpt. Checked against the model this app actually ships (Qwen3.5 9B, a
+ * quick real request plus the ones in llmPrompt.test.ts) to make sure they
+ * do not derail its answers before adding them here.
+ */
+const FEW_SHOT_KEEP = [
+  'Example:',
+  'Excerpt: 20 seconds starting at 00:05:00 of the stream. Times below are seconds from the start of the excerpt.',
+  'Chat reacted strongly around 10 s (chat).',
+  'Most repeated chat messages then: "LOL" ×12.',
+  '',
+  'Transcript of the streamer:',
+  '[0.0] wait what',
+  '[2.0] oh my god he actually did it',
+  '[10.0] no way that is insane',
+  '',
+  'Answer: {"keep": true, "rating": 8, "start": 0, "end": 14, "title": "He Actually Did It"}'
+].join('\n')
+
+const FEW_SHOT_SKIP = [
+  'Example:',
+  'Excerpt: 25 seconds starting at 00:40:00 of the stream. Times below are seconds from the start of the excerpt.',
+  'The streamer got loud around 12 s.',
+  'No chat messages.',
+  '',
+  'Transcript of the streamer:',
+  '[0.0] yeah so basically the loot table works like this',
+  '[6.0] its kind of complicated honestly',
+  '',
+  'Answer: {"keep": false, "rating": 2, "start": 0, "end": 25, "title": ""}'
+].join('\n')
+
 export const SYSTEM_PROMPT =
   'You are an expert short-form video editor. You pick clips from livestream VODs for TikTok, YouTube Shorts and Instagram Reels. ' +
   'You answer with JSON only.'
@@ -75,6 +108,10 @@ export function buildPrompt(ctx: PromptContext, c: Candidate, excerpt: Excerpt, 
     '',
     'Transcript of the streamer:',
     excerpt.lines.length ? excerpt.lines.join('\n') : '(no speech)',
+    '',
+    FEW_SHOT_KEEP,
+    '',
+    FEW_SHOT_SKIP,
     '',
     'Task:',
     `1. Decide if this makes a good ${CLIP_MIN_SEC}-${CLIP_MAX_SEC} second vertical clip on its own (funny, surprising, skillful, emotional or quotable).`,
@@ -192,6 +229,23 @@ export function cleanTitle(t: string): string | null {
     .trim()
   if (s.length > 60) s = `${s.slice(0, 59).trimEnd()}…`
   return s.length >= 2 ? s : null
+}
+
+/**
+ * Combines two independent samples of the same candidate (the bigger
+ * language model tier is asked twice, see the moments step): kept only if
+ * both agree, with the rating and window averaged so one unlucky sample
+ * cannot swing the result alone. Either sample failing to parse counts as no
+ * agreement reached, same as null from a single sample.
+ */
+export function combineSamples(a: Refined | null, b: Refined | null): Refined | null {
+  if (!a || !b) return null
+  return {
+    keep: a.keep && b.keep,
+    rating: Math.round((a.rating + b.rating) / 2),
+    window: { start: round2((a.window.start + b.window.start) / 2), end: round2((a.window.end + b.window.end) / 2) },
+    title: a.title ?? b.title
+  }
 }
 
 /** Final ranking score from the signal strength and the model's rating. */

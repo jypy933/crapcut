@@ -17,6 +17,7 @@ import {
   buildPrompt,
   buildScanPrompt,
   combinedScore,
+  combineSamples,
   excerptLines,
   excerptRange,
   parseAnswer,
@@ -24,6 +25,7 @@ import {
   scanWindows,
   SYSTEM_PROMPT,
   topChat,
+  type Excerpt,
   type Refined
 } from '../core/llmPrompt'
 import { clipFacts } from '../core/clipFacts'
@@ -450,16 +452,28 @@ async function moments(ctx: StepContext): Promise<void> {
 interface LlmSession {
   server: LlamaServer
   close: () => void
+  /**
+   * Ask twice and keep a candidate only if both agree (see `combineSamples`):
+   * benchmarked for the Qwen3.5 9B tier only, so only set when that is the
+   * model actually running. The 3B tier, and a leftover Ministral 8B still
+   * serving during the swap (see `tools/llmMigration.ts`), keep one sample.
+   */
+  twoSample: boolean
 }
+
+/** A second sample's sampling, distinct enough from the default request to be a real second opinion. */
+const SECOND_SAMPLE = { temperature: 0.6, seed: 7919 }
 
 /** Starts the local language model, or returns null (not installed / failed). */
 async function openLlm(ctx: StepContext): Promise<LlmSession | null> {
   const exe = ctx.tools.path('llama')
-  const model = ctx.llmModelOverride ?? ctx.tools.path('model-llm-8b') ?? ctx.tools.path('model-llm-3b')
+  const qwenModel = ctx.tools.path('model-llm-9b')
+  const model = ctx.llmModelOverride ?? qwenModel ?? ctx.tools.path('model-llm-8b') ?? ctx.tools.path('model-llm-3b')
   if (!exe || !model) {
     ctx.log.info('language model not installed; using signals only')
     return null
   }
+  const twoSample = !ctx.llmModelOverride && model === qwenModel
   const release = await ctx.gpu.acquire(ctx.signal)
   const server = new LlamaServer(exe, ctx.paths.root, relative(ctx.paths.root, model), ctx.hw.llm === 'vulkan')
   ctx.progress(0.02, 'Starting the language model')
@@ -474,6 +488,7 @@ async function openLlm(ctx: StepContext): Promise<LlmSession | null> {
   }
   return {
     server,
+    twoSample,
     close: () => {
       server.stop()
       release()
@@ -481,15 +496,24 @@ async function openLlm(ctx: StepContext): Promise<LlmSession | null> {
   }
 }
 
-async function ask(ctx: StepContext, llm: LlmSession, prompt: string): Promise<string> {
+async function ask(ctx: StepContext, llm: LlmSession, prompt: string, sample: 0 | 1 = 0): Promise<string> {
   return llm.server.complete(
     [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: prompt }
     ],
     ANSWER_SCHEMA,
-    ctx.signal
+    ctx.signal,
+    sample === 1 ? SECOND_SAMPLE : undefined
   )
+}
+
+/** One sample for the 3B tier, or two independent samples combined (see `combineSamples`) for the Qwen tier. */
+async function askAndParse(ctx: StepContext, llm: LlmSession, prompt: string, excerpt: Excerpt, duration: number): Promise<Refined | null> {
+  const first = parseAnswer(await ask(ctx, llm, prompt, 0), excerpt, duration)
+  if (!llm.twoSample) return first
+  const second = parseAnswer(await ask(ctx, llm, prompt, 1), excerpt, duration)
+  return combineSamples(first, second)
 }
 
 async function refineCandidates(
@@ -512,9 +536,8 @@ async function refineCandidates(
     const chapter = meta.chapters.find((ch) => c.event >= ch.start && c.event < ch.end)?.title ?? null
     const prompt = buildPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, c, excerpt, topChat(messages, { start: c.peak - 12, end: c.peak + 5 }))
     try {
-      const answer = await ask(ctx, llm, prompt)
-      out[i] = parseAnswer(answer, excerpt, duration)
-      if (!out[i]) ctx.log.warn('unusable model answer', answer.slice(0, 300))
+      out[i] = await askAndParse(ctx, llm, prompt, excerpt, duration)
+      if (!out[i]) ctx.log.warn('unusable model answer')
     } catch (err) {
       if (isCancelled(err) || ctx.signal.aborted) throw new CancelledError()
       ctx.log.warn('model request failed', err)
@@ -553,7 +576,8 @@ async function scanTranscript(
     const excerpt = { offset: range.start, range, lines: excerptLines(words, range) }
     const chapter = meta.chapters.find((ch) => range.start >= ch.start && range.start < ch.end)?.title ?? null
     try {
-      const r = parseAnswer(await ask(ctx, llm, buildScanPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, excerpt)), excerpt, duration)
+      const prompt = buildScanPrompt({ title: meta.vod.title, channel: meta.vod.channel, chapter }, excerpt)
+      const r = await askAndParse(ctx, llm, prompt, excerpt, duration)
       if (!r || !r.keep || r.rating < TRANSCRIPT_MIN_RATING) continue
       const score = combinedScore(transcriptSignal, r.rating)
       // The scan gives a fixed nominal signal, not a z-score; scoreToStrength

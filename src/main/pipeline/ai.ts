@@ -162,13 +162,20 @@ export class LlamaServer {
     throw new UserError('The language model took too long to start.', { detail: this.stderr })
   }
 
-  async complete(messages: ChatMessageIn[], schema: object, signal: AbortSignal): Promise<string> {
+  /**
+   * `sampling` lets a caller take a second, differently-sampled pass at the
+   * same prompt (see the moments step's two-sample check for the bigger
+   * model tier); left out, this is the one deterministic-ish request every
+   * caller used before that existed.
+   */
+  async complete(messages: ChatMessageIn[], schema: object, signal: AbortSignal, sampling?: { temperature?: number; seed?: number }): Promise<string> {
     const res = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.key}` },
       body: JSON.stringify({
         messages,
-        temperature: 0.2,
+        temperature: sampling?.temperature ?? 0.2,
+        ...(sampling?.seed !== undefined ? { seed: sampling.seed } : {}),
         max_tokens: 600,
         chat_template_kwargs: { enable_thinking: false },
         response_format: { type: 'json_schema', json_schema: { name: 'answer', schema, strict: true } }

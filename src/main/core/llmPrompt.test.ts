@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Candidate } from './moments'
-import { buildPrompt, buildScanPrompt, cleanTitle, scanWindows, combinedScore, excerptLines, excerptRange, parseAnswer, ratingFactor, topChat, type Excerpt } from './llmPrompt'
+import { buildPrompt, buildScanPrompt, cleanTitle, scanWindows, combinedScore, combineSamples, excerptLines, excerptRange, parseAnswer, ratingFactor, topChat, type Excerpt, type Refined } from './llmPrompt'
 
 const cand: Candidate = {
   peak: 1010,
@@ -50,6 +50,13 @@ describe('buildPrompt', () => {
     expect(p).toContain('"KEKW" ×2')
     expect(p).toContain('JSON')
   })
+
+  it('includes two worked examples, one kept and one skipped', () => {
+    const ex: Excerpt = { offset: 955, range: { start: 955, end: 1035 }, lines: [] }
+    const p = buildPrompt({ title: 't', channel: 'c', chapter: null }, cand, ex, [])
+    expect(p).toContain('"keep": true')
+    expect(p).toContain('"keep": false')
+  })
 })
 
 describe('parseAnswer', () => {
@@ -78,6 +85,31 @@ describe('parseAnswer', () => {
     expect(parseAnswer('not json', ex, 5000)).toBeNull()
     expect(parseAnswer('{"keep":"yes"}', ex, 5000)).toBeNull()
     expect(parseAnswer('{"keep":true,"rating":5,"start":"a","end":2,"title":"t"}', ex, 5000)).toBeNull()
+  })
+})
+
+describe('combineSamples', () => {
+  const base: Refined = { keep: true, rating: 8, window: { start: 10, end: 20 }, title: 'A' }
+
+  it('keeps a candidate only when both samples agree', () => {
+    expect(combineSamples(base, { ...base, rating: 6 })!.keep).toBe(true)
+    expect(combineSamples(base, { ...base, keep: false })!.keep).toBe(false)
+    expect(combineSamples({ ...base, keep: false }, { ...base, keep: false })!.keep).toBe(false)
+  })
+
+  it('averages the rating and window from both samples', () => {
+    const r = combineSamples(base, { ...base, rating: 6, window: { start: 12, end: 24 } })!
+    expect(r.rating).toBe(7)
+    expect(r.window).toEqual({ start: 11, end: 22 })
+  })
+
+  it('falls back to the second title when the first is unusable', () => {
+    expect(combineSamples({ ...base, title: null }, { ...base, title: 'B' })!.title).toBe('B')
+  })
+
+  it('is null when either sample failed to parse', () => {
+    expect(combineSamples(null, base)).toBeNull()
+    expect(combineSamples(base, null)).toBeNull()
   })
 })
 
