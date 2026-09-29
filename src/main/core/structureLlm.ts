@@ -14,6 +14,9 @@ import type { ChatMessage, Word } from '@shared/types'
 import { pickStructure, scoreStructures, TIE_MARGIN, type LlmChoice, type StructureDecision, type StructureId, type StructureScore } from './structurePick'
 import type { StructureSignals } from './structureSignals'
 
+/** System message for the structure tie-break request; pairs with `buildStructurePrompt`'s own instructions. */
+export const STRUCTURE_SYSTEM_PROMPT = 'You pick between short-form video edit structures for one clip. Answer with the requested JSON object only, nothing else.'
+
 /** "[<word index>] word word word", split at pauses -- indices, never seconds, so the model cannot invent a time. */
 export function wordIndexLines(words: Word[], maxWordsPerLine = 14, pause = 0.6): string[] {
   const lines: string[] = []

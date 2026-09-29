@@ -6,39 +6,16 @@
 
 import type { Word } from '@shared/types'
 import { isKeywordWord } from '@shared/captions'
-import type { StructureSignals, WordSpan } from './structureSignals'
+import { STRUCTURES, type LlmChoice, type StructureDecision, type StructureId, type WordSpan } from '@shared/structure'
+import type { StructureSignals } from './structureSignals'
 
-export const STRUCTURES = ['tightCut', 'payoffFirst', 'quoteCard', 'buildAndPunch', 'rapidFire', 'freezeLoop', 'chatFirst'] as const
-export type StructureId = (typeof STRUCTURES)[number]
+export { STRUCTURES }
+export type { LlmChoice, StructureDecision, StructureId, WordSpan }
 
 export interface StructureScore {
   structure: StructureId
   /** 0..1, higher is a better fit. Not normalised across structures to sum to 1: they are independent fits, not a distribution. */
   score: number
-  reasons: string[]
-}
-
-/** A validated LLM tie-break answer: which of the close structures it prefers, and (optionally) its own pick of quote/emphasis/chat among what it was shown. Already range-checked by `structureLlm.parseStructureAnswer`. */
-export interface LlmChoice {
-  structure: StructureId
-  quoteSpan?: WordSpan
-  emphasisWords?: number[]
-  chatMessageIds?: number[]
-}
-
-export interface StructureDecision {
-  structure: StructureId
-  loopEnding: boolean
-  /** Word span for on-screen text shown during a cold open (payoffFirst). */
-  hookSpan?: WordSpan
-  /** Source (VOD-second) range of the cold-open replay, 1-2 s around the peak (payoffFirst). */
-  coldOpenSpan?: { start: number; end: number }
-  /** The verbatim line shown in the quote card's top bar (quoteCard). */
-  quoteSpan?: WordSpan
-  /** Word indices worth calling out in captions (shouted/numeric/excited words near the chosen span, or near the peak with no span). */
-  emphasisWords: number[]
-  /** Indices into the clip's chat messages that made up the reaction chat drove this pick (chatFirst, or any structure with a real chat burst behind it). */
-  chatMessageIds?: number[]
   reasons: string[]
 }
 

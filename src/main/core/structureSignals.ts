@@ -6,14 +6,11 @@
 
 import type { ChatMessage, Range, Word } from '@shared/types'
 import { isKeywordWord } from '@shared/captions'
+import type { WordSpan } from '@shared/structure'
 import { chatterBurstSeries } from './signals'
 import { wordsIn } from './transcript'
 
-/** A span as word indices into the clip's own `words` array, start and end inclusive. */
-export interface WordSpan {
-  start: number
-  end: number
-}
+export type { WordSpan }
 
 export interface ClipFacts {
   /** The cut, in VOD seconds (`Clip.start`/`Clip.end`). */

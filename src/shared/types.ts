@@ -1,6 +1,7 @@
 // Types shared by the main process and the renderer. Plain data only.
 
 import type { CaptionStyleId } from './captionStyles'
+import type { StructureDecision } from './structure'
 
 /** One transcribed word, times in seconds from the start of the VOD. */
 export interface Word {
@@ -156,6 +157,16 @@ export interface Clip {
   reason: string
   /** The signal features behind this moment; null for clips saved before this existed. */
   signals: MomentSignals | null
+  /**
+   * The automatic re-edit's chosen structure and its picks (quote span,
+   * emphasis words, cold open...). Computed once moments are found (with the
+   * language model when it is available); null only until that first compute
+   * has happened, and for a clip saved before this existed (filled in lazily
+   * on next read -- see `pipeline/clipNormalize.ts`).
+   */
+  structureDecision: StructureDecision | null
+  /** Applies the automatic viral edit at export; on by default, off per clip. */
+  autoEdit: boolean
 }
 
 export type LayoutKind = 'cam_game' | 'blur_fill' | 'center_crop'
@@ -198,6 +209,16 @@ export interface BestOfItem {
   file: string | null
   error: string | null
   createdAt: number
+}
+
+export type AutoEditPreviewStatus = 'building' | 'ready' | 'error' | 'off'
+
+/** Where a clip's automatic-edit preview render stands; pushed as `autoEditPreview:changed`. */
+export interface AutoEditPreviewState {
+  clipId: string
+  status: AutoEditPreviewStatus
+  /** A cache-busting stamp for the current cached preview file, or null with none ready yet. */
+  version: string | null
 }
 
 export type GpuVendor = 'nvidia' | 'amd' | 'intel' | 'other'
