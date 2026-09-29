@@ -22,6 +22,14 @@ export interface GroupOptions {
 
 export const DEFAULT_GROUPING: GroupOptions = { maxWords: 3, maxChars: 18, maxGap: 0.6, linger: 0.4 }
 
+/**
+ * The shortest time a word stays highlighted: a couple of frames even at
+ * 30 fps. Words timed closer together than this (a fast burst, or whisper
+ * giving several words one timestamp) are spread out instead of flickering
+ * past or never lighting up.
+ */
+export const MIN_HIGHLIGHT_SEC = 0.08
+
 /** Splits words into short on-screen groups (TikTok style, a few words at a time). */
 export function groupWords(words: Word[], opts: GroupOptions = DEFAULT_GROUPING): CaptionGroup[] {
   const groups: CaptionGroup[] = []
@@ -45,6 +53,19 @@ export function groupWords(words: Word[], opts: GroupOptions = DEFAULT_GROUPING)
     if (/[.!?…]$/.test(text)) flush()
   }
   flush()
+  // Across group boundaries too, so a word pushed later never lands after
+  // the next group has already taken the screen.
+  let prevStart = -Infinity
+  for (const g of groups) {
+    for (let i = 0; i < g.words.length; i++) {
+      const w = g.words[i]!
+      const t0 = Math.max(w.t0, prevStart + MIN_HIGHLIGHT_SEC)
+      if (t0 !== w.t0) g.words[i] = { ...w, t0, t1: Math.max(w.t1, t0) }
+      prevStart = t0
+    }
+    g.start = g.words[0]!.t0
+    g.end = Math.max(g.end, g.words[g.words.length - 1]!.t1)
+  }
   // Each group stays up until the next starts (or lingers briefly after a phrase).
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i]!

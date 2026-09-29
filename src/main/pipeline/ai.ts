@@ -5,6 +5,7 @@
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { parseVadSpans, type VadSpan } from '../core/transcript'
 import { runTool, killTree, ToolFailedError } from '../tools/process'
 import { LLM_SLOT_CTX, withPathDirs } from '../core/llmBackend'
 import { CancelledError, UserError } from '../util/errors'
@@ -26,11 +27,23 @@ export interface WhisperChunkOptions {
   gpu: boolean
   /** Beam size; 1 means greedy decoding (fastest). */
   beam: number
+  /**
+   * whisper.cpp's alignment-head preset for this model (see `dtwPreset`), or
+   * null to skip DTW word timing and keep only its rough per-word timestamps.
+   */
+  dtw: string | null
   signal: AbortSignal
   onProgress: (f: number) => void
 }
 
+/** The `-dtw` preset matching one of the pinned speech models. */
+export function dtwPreset(model: 'large' | 'small'): string {
+  return model === 'large' ? 'large.v3.turbo' : 'small'
+}
+
 export function whisperArgs(o: Omit<WhisperChunkOptions, 'whisper' | 'cwd' | 'signal' | 'onProgress'>): string[] {
+  // No -np: it also silences the log lines that say where VAD put each
+  // stretch of speech, which DTW word times need (see `parseVadSpans`).
   const args = [
     '-m',
     o.model,
@@ -42,10 +55,10 @@ export function whisperArgs(o: Omit<WhisperChunkOptions, 'whisper' | 'cwd' | 'si
     '1',
     '-sow',
     '-oj',
+    '-ojf',
     '-of',
     o.outBase,
     '-pp',
-    '-np',
     '-t',
     String(o.threads),
     '-bs',
@@ -54,6 +67,8 @@ export function whisperArgs(o: Omit<WhisperChunkOptions, 'whisper' | 'cwd' | 'si
     String(Math.max(1, o.beam))
   ]
   if (!o.gpu) args.push('-ng')
+  // whisper.cpp quietly turns DTW off when flash attention is on (its default).
+  if (o.dtw) args.push('-dtw', o.dtw, '-nfa')
   if (o.vadModel) args.push('--vad', '-vm', o.vadModel)
   return args
 }
@@ -63,20 +78,34 @@ export function parseWhisperProgress(line: string): number | null {
   return m ? Math.min(1, Number(m[1]) / 100) : null
 }
 
-export async function whisperChunk(o: WhisperChunkOptions): Promise<void> {
-  await runTool(o.whisper, whisperArgs(o), {
-    cwd: o.cwd,
-    signal: o.signal,
-    lowPriority: true,
-    onStderr: (line) => {
+export interface WhisperChunkResult {
+  /** Where VAD kept speech (see `parseVadSpans`), or null when VAD was off. */
+  vad: VadSpan[] | null
+  /** False when the run with DTW failed and the chunk was redone without it. */
+  dtw: boolean
+}
+
+export async function whisperChunk(o: WhisperChunkOptions): Promise<WhisperChunkResult> {
+  const run = async (dtw: string | null): Promise<VadSpan[] | null> => {
+    const vadLines: string[] = []
+    const onLine = (line: string): void => {
       const f = parseWhisperProgress(line)
       if (f !== null) o.onProgress(f)
-    },
-    onStdout: (line) => {
-      const f = parseWhisperProgress(line)
-      if (f !== null) o.onProgress(f)
+      else if (line.includes('vad_segment_info')) vadLines.push(line)
     }
-  })
+    await runTool(o.whisper, whisperArgs({ ...o, dtw }), { cwd: o.cwd, signal: o.signal, lowPriority: true, onStderr: onLine, onStdout: onLine })
+    return o.vadModel ? parseVadSpans(vadLines) : null
+  }
+  if (!o.dtw) return { vad: await run(null), dtw: false }
+  try {
+    return { vad: await run(o.dtw), dtw: true }
+  } catch (err) {
+    if (err instanceof CancelledError) throw err
+    // DTW is the least tested part of whisper.cpp on some GPUs: before
+    // blaming the GPU, try the same run with the plain word timestamps.
+    log.warn('speech recognition with DTW word timing failed; retrying without it', err)
+    return { vad: await run(null), dtw: false }
+  }
 }
 
 async function freePort(): Promise<number> {

@@ -123,10 +123,31 @@ possible on a job resumed from before this step existed), and a clip that
 fails re-transcription simply keeps its fast-pass words. Per-clip progress and
 resume mirror the main `transcribe` step's per-chunk checkpoints.
 
+### Word timing
+
+whisper.cpp's own per-word timestamps (`-ml 1 -sow`) get the first word after
+a pause right and then rush the following words ahead of the voice (measured:
+median 215 ms early, worst tenth over 600 ms). Both whisper passes therefore
+also ask for DTW token times (`-ojf -dtw <preset> -nfa`; flash attention
+silently disables DTW). With `--vad`, whisper hears only the speech stretches
+back to back and does not map token or DTW times back to the file, so
+`whisperChunk` reads the `vad_segment_info` log lines (hence no `-np`) and
+`core/transcript.ts` maps each word's DTW time back itself, subtracts the
+measured ~200 ms DTW lag, keeps the start inside its VAD stretch and ends the
+word at the next word, a plausible length for its text, or the end of the
+stretch. Measured against speech with exactly known word times: median about
+60 ms, no word more than about 100 ms early
+(`pipeline/wordTiming.render.test.ts` checks this on Windows). If any word
+lacks a DTW time, or the VAD lines cannot be read, the chunk keeps whisper's
+own timestamps; if a run with DTW fails and one without it works, DTW is off
+for the rest of that job.
+
 ### Captions and layout
 
 `shared/captions.ts` groups words into short on-screen chunks; the review
-preview and the export use the same code. `shared/captionStyles.ts` holds the
+preview and the export use the same code. Each word stays highlighted at
+least `MIN_HIGHLIGHT_SEC`, so words timed at the same instant are spread out
+instead of flickering past. `shared/captionStyles.ts` holds the
 caption look presets (clean, bold pop, boxed, minimal); `core/ass.ts` writes
 an ASS file with one event per word (the spoken word, and with some presets
 shouted/number words, are highlighted). `shared/layoutGeometry.ts` computes

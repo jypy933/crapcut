@@ -15,7 +15,7 @@ import { placeChunkWords, parseWhisperJson } from '../core/transcript'
 import { resolvePaths } from '../paths'
 import { runTool } from '../tools/process'
 import { ToolRegistry } from '../tools/registry'
-import { whisperChunk } from './ai'
+import { dtwPreset, whisperChunk } from './ai'
 import { cutAudioSegment } from './media'
 
 function findOnPath(name: string): string | null {
@@ -54,7 +54,7 @@ describe.skipIf(!ffmpeg || !whisper || !model)('clip captions glue (real FFmpeg 
       await cutAudioSegment(ffmpeg!, dir, relative(dir, full), range.start, range.end - range.start, relative(dir, cut), signal)
 
       const outBase = join(dir, 'out')
-      await whisperChunk({
+      const result = await whisperChunk({
         whisper: whisper!,
         cwd: dir,
         model: relative(dir, model!),
@@ -65,12 +65,13 @@ describe.skipIf(!ffmpeg || !whisper || !model)('clip captions glue (real FFmpeg 
         threads: 2,
         gpu: false,
         beam: 1,
+        dtw: dtwPreset(registry?.path('model-whisper-large') ? 'large' : 'small'),
         signal,
         onProgress: () => {}
       })
 
       const raw = JSON.parse(readFileSync(`${outBase}.json`, 'utf8')) as unknown
-      const parsed = parseWhisperJson(raw)
+      const parsed = parseWhisperJson(raw, result)
       expect(Array.isArray(parsed.words)).toBe(true)
 
       // Whatever whisper made of a tone, offsetting must land inside the range.

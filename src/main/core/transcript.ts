@@ -1,5 +1,6 @@
 // Transcript handling: splitting long audio into chunks at quiet moments,
-// reading whisper.cpp's JSON output and cleaning up the word list.
+// reading whisper.cpp's JSON output (with DTW word times when present) and
+// cleaning up the word list.
 
 import type { Range, Word } from '@shared/types'
 import { DEFAULT_WORD_TIMING, isStretchedWord, maxPlausibleDuration, type WordTimingOptions } from '@shared/wordTiming'
@@ -39,23 +40,90 @@ export function planChunks(durationSec: number, loudness: Float64Array | null, c
   return out
 }
 
+interface WhisperToken {
+  text?: string
+  t_dtw?: number
+}
+
 interface WhisperSegment {
   offsets?: { from?: number; to?: number }
   text?: string
+  /** Only in `-ojf` output. */
+  tokens?: WhisperToken[]
 }
 
 /** Non-speech markers whisper sometimes emits, e.g. "[BLANK_AUDIO]", "(music)". */
 const NON_SPEECH = /^[[(（*♪].*[\])）*♪]$|^♪+$/
 
 /**
- * Reads whisper.cpp `-oj` output produced with `-ml 1 -sow` (one word per
- * segment). Offsets are milliseconds from the start of the audio file.
+ * One stretch of speech that whisper.cpp's VAD kept, in seconds: where it is
+ * in the audio file, and where it starts in the speech-only audio whisper
+ * actually heard (the stretches back to back).
  */
-export function parseWhisperJson(json: unknown): { language: string | null; words: Word[] } {
+export interface VadSpan {
+  start: number
+  end: number
+  vadStart: number
+}
+
+/**
+ * Reads the `vad_segment_info` lines whisper.cpp logs when `--vad` is on, e.g.
+ * "whisper_vad: vad_segment_info: orig_start: 2.40, orig_end: 2.81, vad_start: 0.00, vad_end: 0.41".
+ */
+export function parseVadSpans(lines: string[]): VadSpan[] {
+  const out: VadSpan[] = []
+  for (const line of lines) {
+    const m = /orig_start:\s*([\d.]+),\s*orig_end:\s*([\d.]+),\s*vad_start:\s*([\d.]+)/.exec(line)
+    if (!m) continue
+    const [start, end, vadStart] = [Number(m[1]), Number(m[2]), Number(m[3])]
+    if ([start, end, vadStart].every(Number.isFinite) && end >= start) out.push({ start, end, vadStart })
+  }
+  return out.sort((a, b) => a.vadStart - b.vadStart)
+}
+
+/**
+ * How late whisper.cpp's DTW token times are against the voice. Measured on
+ * speech with exactly known word times, for both pinned models: a steady
+ * ~200 ms, with little spread around it.
+ */
+export const DTW_LAG_SEC = 0.2
+
+/** whisper.cpp keeps this much audio after each VAD stretch; a word may run into it. */
+const VAD_TAIL_SEC = 0.1
+
+/** Moves a time in the speech-only audio back onto the audio file, with the stretch it falls in. */
+export function vadToOriginal(t: number, spans: VadSpan[]): { t: number; span: VadSpan } | null {
+  let span = spans[0]
+  if (!span) return null
+  for (const s of spans) if (s.vadStart <= t + 1e-6) span = s
+  return { t: Math.min(span.start + Math.max(0, t - span.vadStart), span.end + VAD_TAIL_SEC), span }
+}
+
+export interface WhisperTiming {
+  /** From `whisperChunk`: where VAD kept speech, or null when VAD was off. */
+  vad: VadSpan[] | null
+}
+
+interface ParsedWord extends Word {
+  /** DTW start of the word's first piece, seconds (still in whisper's own time), or null. */
+  dtw: number | null
+}
+
+/**
+ * Reads whisper.cpp `-oj`/`-ojf` output produced with `-ml 1 -sow` (one word
+ * per segment). Offsets are milliseconds from the start of the audio file.
+ *
+ * With `timing` given and DTW token times in the file (`-ojf -dtw`), word
+ * starts come from DTW, which is far closer to the voice than whisper's own
+ * per-word timestamps (those rush the words after a pause ahead of the
+ * voice). Without them, or if any word lacks one, the plain timestamps are
+ * used as before.
+ */
+export function parseWhisperJson(json: unknown, timing?: WhisperTiming): { language: string | null; words: Word[]; dtw: boolean } {
   const obj = (json ?? {}) as { result?: { language?: unknown }; transcription?: unknown }
   const language = typeof obj.result?.language === 'string' ? obj.result.language : null
   const segs = Array.isArray(obj.transcription) ? (obj.transcription as WhisperSegment[]) : []
-  const words: Word[] = []
+  const words: ParsedWord[] = []
   for (const seg of segs) {
     if (!seg || typeof seg !== 'object') continue
     const raw = typeof seg.text === 'string' ? seg.text : ''
@@ -74,9 +142,46 @@ export function parseWhisperJson(json: unknown): { language: string | null; word
       prev.t1 = Math.max(prev.t1, t1)
       continue
     }
-    words.push({ t0, t1, text })
+    words.push({ t0, t1, text, dtw: segmentDtw(seg) })
   }
-  return { language, words: tidyWords(words) }
+  const dtwWords = timing ? applyDtw(words, timing) : null
+  const plain = words.map(({ t0, t1, text }) => ({ t0, t1, text }))
+  return { language, words: tidyWords(dtwWords ?? plain), dtw: dtwWords !== null }
+}
+
+/** DTW time (seconds) of a segment's first real token, or null. */
+function segmentDtw(seg: WhisperSegment): number | null {
+  if (!Array.isArray(seg.tokens)) return null
+  for (const tok of seg.tokens) {
+    if (!tok || typeof tok.text !== 'string' || tok.text.startsWith('[_')) continue
+    const t = Number(tok.t_dtw)
+    return Number.isFinite(t) && t >= 0 ? t / 100 : null
+  }
+  return null
+}
+
+/**
+ * Word times from DTW starts: each word starts at its DTW time less the
+ * measured lag, never before the VAD stretch it is in (VAD finds the start
+ * of speech very precisely), and ends at the next word, a plausible length
+ * for its text, or the end of its stretch, whichever comes first -- so words
+ * never run on into a pause. Null when any word has no DTW time.
+ */
+function applyDtw(words: ParsedWord[], timing: WhisperTiming): Word[] | null {
+  if (words.length === 0 || words.some((w) => w.dtw === null)) return null
+  if (timing.vad && timing.vad.length === 0) return null
+  const placed: { t0: number; text: string; spanEnd: number }[] = []
+  for (const w of words) {
+    const mapped = timing.vad ? vadToOriginal(w.dtw!, timing.vad)! : null
+    const raw = mapped ? mapped.t : w.dtw!
+    const floor = Math.max(mapped ? mapped.span.start : 0, placed[placed.length - 1]?.t0 ?? 0)
+    placed.push({ t0: Math.round(Math.max(floor, raw - DTW_LAG_SEC) * 1000) / 1000, text: w.text, spanEnd: mapped ? mapped.span.end + VAD_TAIL_SEC : Infinity })
+  }
+  return placed.map((w, i) => {
+    const next = placed[i + 1]
+    const t1 = Math.min(next ? next.t0 : Infinity, w.t0 + maxPlausibleDuration(w.text), w.spanEnd)
+    return { t0: w.t0, t1: Math.max(w.t0, t1), text: w.text }
+  })
 }
 
 /**

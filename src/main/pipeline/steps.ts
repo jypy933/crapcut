@@ -50,7 +50,7 @@ import { nvidiaFreeVramMb } from '../tools/gpu'
 import type { ToolRegistry } from '../tools/registry'
 import { UserError, isCancelled, throwIfAborted } from '../util/errors'
 import type { Logger } from '../util/log'
-import { downloadChat, LlamaServer, whisperChunk } from './ai'
+import { downloadChat, dtwPreset, LlamaServer, whisperChunk, type WhisperChunkResult } from './ai'
 import type { GpuLock } from './gpuLock'
 import { cutAudioSegment, cutWav, extractPcm, fetchMutedRanges, prepareAudio, probeMedia, silentRanges } from './media'
 import { downloadAudio, downloadSection, fetchVodMeta } from './ytdlp'
@@ -204,6 +204,8 @@ async function transcribe(ctx: StepContext): Promise<void> {
   if (!large && !small) throw new UserError('The speech model is missing. Open setup to download it again.', { retryable: false })
   // The large model on the GPU; the small one on the CPU (the large one is far too slow there).
   const modelFor = (gpu: boolean): string => (gpu ? (large ?? small)! : (small ?? large)!)
+  // Off for the rest of the job once a run with DTW failed and one without it worked.
+  let useDtw = true
   const vad = ctx.tools.path('model-vad')
   const root = ctx.paths.root
   const rel = (p: string): string => relative(root, p)
@@ -243,12 +245,13 @@ async function transcribe(ctx: StepContext): Promise<void> {
       const wav = join(outDir, `${name}.wav`)
       await cutWav(ffmpeg, root, rel(join(ctx.dir, 'audio16k.wav')), chunk.start, chunk.end - chunk.start, rel(wav), ctx.signal)
       const outBase = join(outDir, `${name}.raw`)
-      const run = async (gpu: boolean): Promise<void> => {
+      const run = async (gpu: boolean): Promise<WhisperChunkResult> => {
         onGpu = gpu
-        return whisperChunk({
+        const model = modelFor(gpu)
+        const result = await whisperChunk({
           whisper: gpu && gpuWhisper ? gpuWhisper : cpu,
           cwd: root,
-          model: rel(modelFor(gpu)),
+          model: rel(model),
           vadModel: vad ? rel(vad) : null,
           audio: rel(wav),
           outBase: rel(outBase),
@@ -256,12 +259,16 @@ async function transcribe(ctx: StepContext): Promise<void> {
           threads: gpu ? 4 : cpuThreads,
           gpu,
           beam: gpu ? 5 : 1,
+          dtw: useDtw ? dtwPreset(model === large ? 'large' : 'small') : null,
           signal: ctx.signal,
           onProgress: report
         })
+        if (useDtw && !result.dtw) useDtw = false
+        return result
       }
+      let result: WhisperChunkResult
       try {
-        await run(useGpu)
+        result = await run(useGpu)
       } catch (err) {
         if (isCancelled(err) || !useGpu) throw err
         // A one-off failure (a game briefly holding the VRAM) should not send
@@ -269,9 +276,10 @@ async function transcribe(ctx: StepContext): Promise<void> {
         gpuFailures++
         ctx.log.warn(`GPU transcription failed (${gpuFailures} of ${MAX_GPU_FAILURES}); this chunk goes to the CPU`, err)
         if (gpuFailures >= MAX_GPU_FAILURES) useGpu = false
-        await run(false)
+        result = await run(false)
       }
-      const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`))
+      const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`), result)
+      if (!parsed.dtw && parsed.words.length > 0) ctx.log.warn(`${name}: no DTW word times; using whisper's own`)
       if (!language && parsed.language) {
         language = parsed.language
         writeFileSync(langFile, language)
@@ -790,6 +798,7 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
   let failures = 0
   let useGpu = !!gpuWhisper
   let gpuFailures = 0
+  let useDtw = true
   const release = await ctx.gpu.acquire(ctx.signal)
   try {
     for (let i = 0; i < clips.length; i++) {
@@ -804,8 +813,8 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
       const outBase = join(outDir, `${clip.id}.raw`)
       try {
         await cutAudioSegment(ffmpeg, root, rel(fullAudio), range.start, range.end - range.start, rel(wav), ctx.signal)
-        const run = (gpu: boolean): Promise<void> =>
-          whisperChunk({
+        const run = async (gpu: boolean): Promise<WhisperChunkResult> => {
+          const result = await whisperChunk({
             whisper: gpu && gpuWhisper ? gpuWhisper : cpu,
             cwd: root,
             model: rel(large),
@@ -816,19 +825,24 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
             threads: gpu ? 4 : cpuThreads,
             gpu,
             beam: gpu ? 5 : 1,
+            dtw: useDtw ? dtwPreset('large') : null,
             signal: ctx.signal,
             onProgress: report
           })
+          if (useDtw && !result.dtw) useDtw = false
+          return result
+        }
+        let result: WhisperChunkResult
         try {
-          await run(useGpu)
+          result = await run(useGpu)
         } catch (err) {
           if (isCancelled(err) || !useGpu) throw err
           gpuFailures++
           ctx.log.warn(`GPU re-transcription failed (${gpuFailures} of ${MAX_GPU_FAILURES}); this clip goes to the CPU`, err)
           if (gpuFailures >= MAX_GPU_FAILURES) useGpu = false
-          await run(false)
+          result = await run(false)
         }
-        const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`))
+        const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`), result)
         let words = parsed.words
         if (words.some((w) => isStretchedWord(w))) {
           try {
