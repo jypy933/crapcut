@@ -150,7 +150,10 @@ export const ARTIFACTS: readonly Artifact[] = [
     entry: 'ggml-large-v3-turbo-q8_0.bin',
     licence: { name: 'MIT', url: 'https://github.com/openai/whisper/blob/main/LICENSE', note: 'OpenAI Whisper weights, ggml conversion' },
     optional: false,
-    needed: (hw) => hw.whisper === 'cuda'
+    // On NVIDIA it transcribes the whole VOD. On the CPU it is too slow for
+    // that, but fast enough to re-transcribe just the chosen clips, so every
+    // machine needs it.
+    needed: () => true
   },
   {
     id: 'model-whisper-small',
