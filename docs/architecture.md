@@ -41,18 +41,35 @@ is already on disk and carries on.
 
 ### Finding moments
 
-1. Chat reaction per second: messages weighted by laughter/hype/shock words,
-   each chatter counted at most once every 3 seconds (anti-spam), bots ignored.
+1. Chat reaction: for each second, how many *different* chatters reacted in a
+   rolling ~20 s window, each counted once and weighted by their strongest
+   message (laughter/hype/shock words and tokens like "clip", "W", "L", "?"),
+   bots ignored. Counting distinct chatters rather than raw message counts
+   means a small, slow chat can still show a real reaction as a handful of
+   different regulars, not just a busier one.
 2. Robust z-score against a rolling 10-minute median, so a busy stream and a
-   quiet one are judged against their own normal.
-3. Peaks at least 45 s apart; the moment is placed a few seconds **before** the
-   chat reaction (stream delay + typing time). Loud moments that chat missed
-   are added from the audio loudness.
+   quiet one are judged against their own normal; a big, fast chat needs a
+   much wider burst of different chatters to register than a small one does.
+3. Peaks at least 45 s apart, with at least 3 different chatters in the
+   window as a sanity floor; the moment is placed a few seconds **before**
+   the chat reaction (stream delay + typing time). Loud moments that chat
+   missed are added from the audio loudness the same way as before, so a
+   silent-but-funny reaction is still found; loudness has no ceiling, so its
+   contribution to ranking is compressed and a confirmed chat reaction starts
+   from a base score, keeping one very loud, unconfirmed moment from
+   burying several real chat reactions.
 4. Stream start/end and Twitch-muted parts are skipped.
 5. The local LLM gets each candidate's transcript excerpt and chat summary and
    returns JSON (keep, rating, start, end, title), constrained by a JSON schema
    and validated again. Without the LLM, cut points snap to pauses in speech
    and titles come from the transcript.
+6. The number of clips is not a fixed target: chat- and transcript-backed
+   candidates are kept as found, and loud-only candidates need to clearly
+   stand out from this stream's *other* loud moments (not just clear the
+   initial detection threshold), so a stream full of merely-loud, mediocre
+   audio spikes does not fill up the review list. At least 3 clips are kept
+   when any candidates exist, and at most one per 20 minutes of stream
+   (capped at 20) to keep review manageable.
 
 ### Captions and layout
 
