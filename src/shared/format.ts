@@ -11,6 +11,17 @@ export function formatEta(sec: number | null): string | null {
   return m ? `about ${h} h ${m} min` : `about ${h} h`
 }
 
+/** The same, tight: "3 min", "1 h 20 min", "<1 min". */
+export function formatEtaShort(sec: number | null): string | null {
+  if (sec === null || !Number.isFinite(sec)) return null
+  if (sec < 60) return '<1 min'
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min} min`
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return m ? `${h} h ${m} min` : `${h} h`
+}
+
 /** 1.2 GB, 850 MB, 12 KB. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB'

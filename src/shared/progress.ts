@@ -1,6 +1,7 @@
 // Pure helpers that turn job, export and best-of state into what the UI (and
 // the Windows taskbar) shows: one status line per row and one overall bar.
 
+import { formatEta, formatEtaShort } from './format'
 import { STEP_IDS, STEP_LABELS, type BestOfItem, type ExportItem, type JobSummary, type StepId } from './types'
 
 /** A time left that was not refreshed for this long is stale (the work has stalled) and is hidden. */
@@ -127,4 +128,17 @@ export function workLabel(kind: 'export' | 'bestOf', s: WorkSummary): string {
   if (kind === 'bestOf') return s.running > 0 ? 'Building the best-of video' : 'Waiting to build the best-of video'
   if (s.running === 0) return s.total > 1 ? 'Waiting to export' : 'Waiting to export the clip'
   return s.total > 1 ? `Exporting clip ${Math.min(s.total, s.done + s.failed + 1)} of ${s.total}` : 'Exporting the clip'
+}
+
+/** The pill's text: a short line that fits one line, and the full wording for its tooltip. */
+export function workPillText(kind: 'export' | 'bestOf', s: WorkSummary, fraction: number): { short: string; full: string } {
+  const eta = formatEta(s.etaSec)
+  const percent = !eta && s.running > 0 && fraction > 0.005 ? `${Math.round(fraction * 100)}%` : null
+  const full = [workLabel(kind, s), eta ? `${eta} left` : percent].filter(Boolean).join(' · ')
+  let label: string
+  if (kind === 'bestOf') label = s.running > 0 ? 'Building best-of' : 'Waiting to build'
+  else if (s.running === 0) label = 'Waiting to export'
+  else label = s.total > 1 ? `Exporting ${Math.min(s.total, s.done + s.failed + 1)} of ${s.total}` : 'Exporting'
+  const short = [label, eta ? formatEtaShort(s.etaSec) : percent].filter(Boolean).join(' · ')
+  return { short, full }
 }

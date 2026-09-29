@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { freshEta, jobFraction, jobStepLine, STALE_ETA_MS, summarizeWork, workLabel } from './progress'
+import { freshEta, jobFraction, jobStepLine, STALE_ETA_MS, summarizeWork, workLabel, workPillText } from './progress'
 import { STEP_IDS, type JobSummary, type StepId, type StepState } from './types'
 
 const step = (status: StepState['status'], progress = status === 'done' ? 1 : 0, etaSec: number | null = null, detail: string | null = null): StepState => ({ status, progress, etaSec, detail })
@@ -123,5 +123,21 @@ describe('workLabel', () => {
   })
   it('names the best-of build', () => {
     expect(workLabel('bestOf', base)).toBe('Building the best-of video')
+  })
+})
+
+describe('workPillText', () => {
+  const base = { total: 4, done: 1, running: 1, queued: 2, failed: 0, fraction: 0.3, etaSec: 120 }
+  it('keeps the pill short and the tooltip full', () => {
+    expect(workPillText('export', base, 0.3)).toEqual({ short: 'Exporting 2 of 4 · 2 min', full: 'Exporting clip 2 of 4 · about 2 min left' })
+  })
+  it('falls back to a percentage without a time left', () => {
+    expect(workPillText('export', { ...base, etaSec: null }, 0.3).short).toBe('Exporting 2 of 4 · 30%')
+    expect(workPillText('export', { ...base, etaSec: null }, 0).short).toBe('Exporting 2 of 4')
+  })
+  it('covers a single clip, waiting and the best-of build', () => {
+    expect(workPillText('export', { ...base, total: 1, etaSec: 30 }, 0.5).short).toBe('Exporting · <1 min')
+    expect(workPillText('export', { ...base, running: 0, etaSec: null }, 0).short).toBe('Waiting to export')
+    expect(workPillText('bestOf', { ...base, etaSec: 4000 }, 0.5)).toEqual({ short: 'Building best-of · 1 h 7 min', full: 'Building the best-of video · about 1 h 7 min left' })
   })
 })

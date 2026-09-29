@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react'
-import { formatEta } from '@shared/format'
-import { summarizeWork, workLabel } from '@shared/progress'
+import { summarizeWork, workPillText } from '@shared/progress'
 import type { Route } from '../App'
 import { hasActiveWork, seen, useNow, type Work } from '../lib/work'
 import { ProgressBar } from './ui'
@@ -19,17 +18,13 @@ export function WorkIndicator({ work, go }: { work: Work; go: (r: Route) => void
   // The job of whatever is running now (or next in line).
   const items = [...(exporting ? work.exports : work.bestOf)].filter((i) => i.status === 'running' || i.status === 'queued')
   const jobId = (items.find((i) => i.status === 'running') ?? items[0])?.jobId
-  const eta = formatEta(main.etaSec)
   // Everything under way, exports and best-of together, as one bar.
   const all = [exporting, building].filter((s) => s !== null)
   const fraction = all.reduce((sum, s) => sum + s.fraction, 0) / all.length
+  const text = workPillText(kind, main, fraction)
   return (
-    <button type="button" className="work-pill no-drag" title="Show what is being made" onClick={() => jobId && go({ name: 'review', jobId })}>
-      <span className="small">
-        {workLabel(kind, main)}
-        {eta ? <span className="faint"> · {eta} left</span> : null}
-        {!eta && main.running > 0 && fraction > 0.005 ? <span className="faint"> · {Math.round(fraction * 100)}%</span> : null}
-      </span>
+    <button type="button" className="work-pill no-drag" title={text.full} onClick={() => jobId && go({ name: 'review', jobId })}>
+      <span className="small work-pill-text">{text.short}</span>
       <ProgressBar value={fraction} />
     </button>
   )

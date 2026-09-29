@@ -574,15 +574,26 @@ kbd {
 .work-pill {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 4px;
+  flex: none;
   width: 200px;
-  padding: 5px 10px;
+  height: 30px;
+  padding: 0 10px;
+  overflow: hidden;
   border-radius: 6px;
   border: none;
   background: var(--panel-2);
   color: var(--text-2);
   cursor: pointer;
   text-align: left;
+}
+.work-pill-text {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
 }
 .work-pill:hover {
   background: var(--panel-3);
