@@ -23,6 +23,10 @@ const api: CrapcutApi = {
   clipUrl: (jobId, clipId) => {
     if (!safeId.test(jobId) || !safeId.test(clipId)) return ''
     return `crapcut-media://clip/${jobId}/${clipId}`
+  },
+  previewUrl: (jobId, clipId, version) => {
+    if (!safeId.test(jobId) || !safeId.test(clipId)) return ''
+    return `crapcut-media://preview/${jobId}/${clipId}?v=${encodeURIComponent(version)}`
   }
 }
 

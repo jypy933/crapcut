@@ -1,12 +1,15 @@
 // Custom protocols:
-//   app://bundle/...                 the UI's own files (instead of file://)
-//   crapcut-media://clip/<job>/<id>  a clip's downloaded video, with Range
-//                                    support so the review player can seek.
+//   app://bundle/...                     the UI's own files (instead of file://)
+//   crapcut-media://clip/<job>/<id>      a clip's downloaded video, with Range
+//                                        support so the review player can seek.
+//   crapcut-media://preview/<job>/<id>   the clip's cached automatic-edit
+//                                        preview, whichever one is newest.
 
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { extname, join, normalize, relative, isAbsolute } from 'node:path'
 import { Readable } from 'node:stream'
 import { protocol } from 'electron'
+import { findPreviewFile } from './pipeline/autoEditPreview'
 import { jobDir, type AppPaths } from './paths'
 
 export function registerSchemes(): void {
@@ -89,9 +92,17 @@ export function handleProtocols(paths: AppPaths, rendererDir: string): void {
   protocol.handle('crapcut-media', (request) => {
     const url = new URL(request.url)
     const parts = url.pathname.split('/').filter(Boolean)
-    if (url.host !== 'clip' || parts.length !== 2 || !parts.every((p) => ID.test(p))) return new Response('not found', { status: 404 })
-    const file = join(jobDir(paths, parts[0]!), 'clips', `${parts[1]}.mp4`)
-    if (!existsSync(file)) return new Response('not found', { status: 404 })
-    return fileResponse(file, request.headers.get('range'), 'video/mp4')
+    if (parts.length !== 2 || !parts.every((p) => ID.test(p))) return new Response('not found', { status: 404 })
+    if (url.host === 'clip') {
+      const file = join(jobDir(paths, parts[0]!), 'clips', `${parts[1]}.mp4`)
+      if (!existsSync(file)) return new Response('not found', { status: 404 })
+      return fileResponse(file, request.headers.get('range'), 'video/mp4')
+    }
+    if (url.host === 'preview') {
+      const file = findPreviewFile(paths, parts[0]!, parts[1]!)
+      if (!file) return new Response('not found', { status: 404 })
+      return fileResponse(file, request.headers.get('range'), 'video/mp4')
+    }
+    return new Response('not found', { status: 404 })
   })
 }

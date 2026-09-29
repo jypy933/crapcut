@@ -20,6 +20,7 @@ export const INVOKE_CHANNELS = [
   'clips:update',
   'clips:reset',
   'clips:pickMusic',
+  'clips:previewAutoEdit',
   'layouts:list',
   'layouts:save',
   'layouts:delete',
@@ -43,4 +44,13 @@ export const INVOKE_CHANNELS = [
   'models:remove'
 ] as const
 
-export const EVENT_CHANNELS = ['setup:status', 'jobs:changed', 'exports:changed', 'bestOf:changed', 'app:update', 'channelWatch:changed', 'jobs:focus'] as const
+export const EVENT_CHANNELS = [
+  'setup:status',
+  'jobs:changed',
+  'exports:changed',
+  'bestOf:changed',
+  'app:update',
+  'channelWatch:changed',
+  'jobs:focus',
+  'autoEditPreview:changed'
+] as const

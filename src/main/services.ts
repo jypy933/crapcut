@@ -6,6 +6,7 @@ import { AutostartManager } from './autostart'
 import { ChannelWatchService } from './channelWatch'
 import { sendEvent } from './ipc'
 import { resolvePaths, type AppPaths } from './paths'
+import { AutoEditPreviewService } from './pipeline/autoEditPreview'
 import { BestOfBuilder } from './pipeline/bestOf'
 import { Exporter } from './pipeline/exporter'
 import { GpuLock } from './pipeline/gpuLock'
@@ -32,6 +33,7 @@ export interface AppServices {
   runner: JobRunner
   exporter: Exporter
   bestOf: BestOfBuilder
+  autoEditPreview: AutoEditPreviewService
   updater: Updater
   channelWatch: ChannelWatchService
   autostart: AutostartManager
@@ -85,6 +87,9 @@ export async function createServices(resources: string, getWindow: () => Browser
   const bestOf = new BestOfBuilder(store, paths, tools, exporter, encodeLock, {
     onChanged: (item) => sendEvent(getWindow(), 'bestOf:changed', item)
   })
+  const autoEditPreview = new AutoEditPreviewService(store, paths, tools, {
+    onChanged: (state) => sendEvent(getWindow(), 'autoEditPreview:changed', state)
+  })
   const updater = new Updater((s) => sendEvent(getWindow(), 'app:update', s))
   setup.onChange((s) => sendEvent(getWindow(), 'setup:status', s))
   const channelWatch = new ChannelWatchService({ store, tools, isReady: () => setup.isReady(), enqueueJob: (jobId) => runner.enqueue(jobId) })
@@ -116,6 +121,7 @@ export async function createServices(resources: string, getWindow: () => Browser
     runner,
     exporter,
     bestOf,
+    autoEditPreview,
     updater,
     channelWatch,
     autostart,

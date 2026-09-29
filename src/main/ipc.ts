@@ -22,7 +22,7 @@ const log = logger('ipc')
 type Handler<C extends InvokeChannel> = (...args: never[]) => Promise<InvokeResult[C]> | InvokeResult[C]
 
 export function registerIpc(services: AppServices, getWindow: () => BrowserWindow | null, devServer: string | undefined): void {
-  const { store, runner, exporter, bestOf, setup, updater, paths, channelWatch, autostart, hardware } = services
+  const { store, runner, exporter, bestOf, autoEditPreview, setup, updater, paths, channelWatch, autostart, hardware } = services
 
   const handlers: { [C in InvokeChannel]: Handler<C> } = {
     'app:info': () => services.appInfo(),
@@ -80,6 +80,7 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
       syncTasteDecision(next)
       return next
     },
+    'clips:previewAutoEdit': (clipId: string, format) => autoEditPreview.request(clipId, format),
     'clips:pickMusic': async (clipId: string) => {
       const clip = await requireClip(clipId)
       const win = getWindow()
