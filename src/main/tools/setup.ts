@@ -4,9 +4,9 @@
 import { statfs } from 'node:fs/promises'
 import type { HardwareProfile, SetupComponent, SetupStatus } from '@shared/types'
 import { EtaEstimator } from '../core/eta'
-import { isCancelled, userMessage } from '../util/errors'
+import { isCancelled, UserError, userMessage } from '../util/errors'
 import { logger } from '../util/log'
-import { neededArtifacts, type Artifact } from './manifest'
+import { artifact, neededArtifacts, type Artifact, type ToolId } from './manifest'
 import type { ToolRegistry } from './registry'
 
 const log = logger('setup')
@@ -61,6 +61,11 @@ export class SetupManager {
     return () => this.listeners.delete(fn)
   }
 
+  /** One component's state, for a settings screen that only cares about a few ids. */
+  component(id: ToolId): SetupComponent | undefined {
+    return this.components.get(id)
+  }
+
   /** Ready when every required (non-optional) component is installed. */
   isReady(): boolean {
     return [...this.components.values()].every((c) => c.optional || c.state === 'ready')
@@ -101,10 +106,11 @@ export class SetupManager {
     this.emit(force)
   }
 
-  /** Space needed for what is left (zips need room to extract). */
-  requiredBytes(): number {
+  /** Space needed for what is left (zips need room to extract). Restrict to `only` for a partial download. */
+  requiredBytes(only?: readonly ToolId[]): number {
     let need = HEADROOM_BYTES
     for (const a of this.artifacts()) {
+      if (only && !only.includes(a.id)) continue
       const c = this.components.get(a.id)
       if (!c || c.state === 'ready') continue
       need += a.size * (a.kind === 'zip' ? 2 : 1) * (1 - c.progress)
@@ -116,7 +122,12 @@ export class SetupManager {
     this.controller?.abort()
   }
 
-  async start(): Promise<void> {
+  /**
+   * Downloads what is missing. With `only`, downloads just those artifacts
+   * (e.g. one optional AI part picked from a settings screen) instead of
+   * everything the PC still needs.
+   */
+  async start(only?: readonly ToolId[]): Promise<void> {
     if (this.running) return
     this.running = true
     this.error = null
@@ -128,13 +139,13 @@ export class SetupManager {
 
     try {
       this.free = await freeBytes(this.rootDir)
-      if (this.free !== null && this.free < this.requiredBytes()) {
-        const needGb = Math.ceil(this.requiredBytes() / 1024 ** 3)
+      if (this.free !== null && this.free < this.requiredBytes(only)) {
+        const needGb = Math.ceil(this.requiredBytes(only) / 1024 ** 3)
         this.error = `Not enough free disk space. CrapCut needs about ${needGb} GB free on this drive.`
         return
       }
 
-      const todo = this.artifacts().filter((a) => this.components.get(a.id)?.state !== 'ready')
+      const todo = this.artifacts().filter((a) => (!only || only.includes(a.id)) && this.components.get(a.id)?.state !== 'ready')
       // Small tools first so the app becomes usable quickly; big models last.
       todo.sort((a, b) => Number(a.optional) - Number(b.optional) || a.size - b.size)
       const totalBytes = todo.reduce((s, a) => s + a.size, 0)
@@ -172,6 +183,32 @@ export class SetupManager {
       this.controller = null
       this.free = await freeBytes(this.rootDir)
       this.emit(true)
+    }
+  }
+
+  /**
+   * Deletes installed (or partially downloaded) artifacts to free space.
+   * Ignored while a download is running. `inUse`, when it returns true,
+   * refuses with one plain sentence instead (e.g. a job or export still
+   * has the files open, so deleting them on Windows would fail partway
+   * through and leave a broken install).
+   */
+  remove(ids: readonly ToolId[], inUse?: () => boolean): void {
+    if (this.running) return
+    if (inUse?.()) throw new UserError('Wait until the current job and exports finish.')
+    for (const id of ids) {
+      const a = artifact(id)
+      try {
+        this.registry.remove(a)
+        this.update(id, { state: 'missing', progress: 0 }, true)
+      } catch (err) {
+        // Leave the component matching what's actually on disk, whatever
+        // partially happened, rather than guessing.
+        log.error(`remove failed: ${a.id}`, err)
+        const stillInstalled = this.registry.isInstalled(a)
+        this.update(id, { state: stillInstalled ? 'ready' : 'missing', progress: stillInstalled ? 1 : 0 }, true)
+        throw new UserError(`Could not remove ${a.label}. Make sure no job or export is using it and try again.`, { cause: err })
+      }
     }
   }
 }

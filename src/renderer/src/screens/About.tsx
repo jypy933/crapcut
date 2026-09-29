@@ -1,8 +1,56 @@
-import { Download, FileText, FolderOpen, RefreshCw, RotateCcw } from 'lucide-react'
+import { AlertCircle, Check, Circle, Download, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
-import type { AppInfo, AutostartStatus, UpdateState } from '@shared/types'
-import { call } from '../api'
-import { Spinner, Toggle } from '../components/ui'
+import { formatBytes } from '@shared/format'
+import { buildOptionalModels, type OptionalModel } from '@shared/optionalModels'
+import type { AppInfo, AutostartStatus, SetupStatus, UpdateState } from '@shared/types'
+import { call, errorText, useEvent } from '../api'
+import { ProgressBar, Spinner, Toggle } from '../components/ui'
+
+const ACTIVE_STATES = new Set(['downloading', 'verifying', 'installing'])
+
+function ModelPartRow({ model, onDownload, onCancel, onRemove }: { model: OptionalModel; onDownload: () => void; onCancel: () => void; onRemove: () => void }): ReactNode {
+  const busy = ACTIVE_STATES.has(model.state)
+  return (
+    <div className="model-part">
+      <span>
+        {model.state === 'ready' ? (
+          <Check size={16} color="var(--good)" />
+        ) : model.state === 'failed' ? (
+          <AlertCircle size={16} color="var(--warn)" />
+        ) : busy ? (
+          <Spinner />
+        ) : (
+          <Circle size={14} color="var(--text-3)" />
+        )}
+      </span>
+      <div className="grow">
+        <div className="ellipsis">
+          {model.label}
+          {model.variant && <span className="faint"> · {model.variant}</span>}
+        </div>
+        <div className="small faint">{model.description}</div>
+        {busy && <ProgressBar value={model.state === 'downloading' ? model.progress : 1} good={model.state !== 'downloading'} />}
+        {model.state === 'failed' && <div className="small faint">Could not download. Check your internet connection and try again.</div>}
+      </div>
+      <span className="small faint" style={{ textAlign: 'right' }}>
+        {model.state === 'verifying' ? 'Checking...' : model.state === 'installing' ? 'Installing...' : formatBytes(model.sizeBytes)}
+      </span>
+      {model.state === 'ready' ? (
+        <button type="button" className="btn sm ghost" onClick={onRemove}>
+          <Trash2 size={13} /> Remove
+        </button>
+      ) : busy ? (
+        <button type="button" className="btn sm ghost" onClick={onCancel}>
+          Cancel
+        </button>
+      ) : (
+        <button type="button" className="btn sm" onClick={onDownload}>
+          <Download size={13} /> {model.state === 'failed' ? 'Retry' : 'Download'}
+        </button>
+      )}
+    </div>
+  )
+}
 
 function updateLine(u: UpdateState): string {
   switch (u.kind) {
@@ -27,12 +75,27 @@ export function About({ update }: { update: UpdateState }): ReactNode {
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [tuned, setTuned] = useState(false)
   const [autostart, setAutostart] = useState<AutostartStatus | null>(null)
+  const [setup, setSetup] = useState<SetupStatus | null>(null)
+  const [modelsError, setModelsError] = useState<string | null>(null)
   useEffect(() => {
     void call('app:info').then(setInfo)
     void call('taste:status').then((s) => setTuned(s.tuned))
     void call('settings:getAutostart').then(setAutostart)
+    void call('setup:status').then(setSetup)
   }, [])
+  useEvent('setup:status', setSetup)
   if (!info) return null
+
+  const models = setup?.hardware ? buildOptionalModels(setup.hardware, setup.components) : []
+
+  function downloadModel(id: OptionalModel['id']): void {
+    setModelsError(null)
+    void call('models:download', id).catch((err) => setModelsError(errorText(err)))
+  }
+  function removeModel(id: OptionalModel['id']): void {
+    setModelsError(null)
+    void call('models:remove', id).catch((err) => setModelsError(errorText(err)))
+  }
 
   return (
     <div className="page">
@@ -74,6 +137,24 @@ export function About({ update }: { update: UpdateState }): ReactNode {
           />
           Start with Windows
         </label>
+      )}
+
+      {models.length > 0 && (
+        <>
+          <h2 style={{ marginTop: 34 }}>Optional AI parts</h2>
+          <p className="muted small">Not required. Each downloads once from its official source and is checked before use.</p>
+          <div className="card model-parts">
+            {models.map((m) => (
+              <ModelPartRow key={m.id} model={m} onDownload={() => downloadModel(m.id)} onCancel={() => void call('setup:cancel')} onRemove={() => removeModel(m.id)} />
+            ))}
+          </div>
+          {modelsError && (
+            <div className="error">
+              <AlertCircle size={15} style={{ flex: 'none', marginTop: 2 }} />
+              {modelsError}
+            </div>
+          )}
+        </>
       )}
 
       {tuned && (

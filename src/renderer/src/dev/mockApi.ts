@@ -3,7 +3,8 @@
 
 import { parseChannelName } from '@shared/channelName'
 import type { CrapcutApi, EventChannel, Events, InvokeChannel } from '@shared/ipc'
-import type { AppInfo, AutostartStatus, BestOfItem, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, StepId, StepState, Word } from '@shared/types'
+import { optionalModelArtifactIds, type OptionalModelId } from '@shared/optionalModels'
+import type { AppInfo, AutostartStatus, BestOfItem, ChannelWatchStatus, Clip, ExportItem, HardwareProfile, JobSummary, Layout, SetupComponent, SetupStatus, StepId, StepState, Word } from '@shared/types'
 
 const listeners = new Map<string, Set<(p: unknown) => void>>()
 function emit<E extends EventChannel>(e: E, p: Events[E]): void {
@@ -21,23 +22,77 @@ const allDone = (): Record<StepId, StepState> => ({ metadata: step('done'), chat
 const params = new URLSearchParams(location.search)
 let setupReady = params.get('setup') !== '1'
 
+// Mutable so the optional-AI-parts simulation below can move a component
+// through downloading -> verifying -> ready over time.
+const modelComponents: SetupComponent[] = [
+  { id: 'ffmpeg', label: 'FFmpeg', sizeBytes: 109282242, state: 'ready', progress: 1, optional: false },
+  { id: 'yt-dlp', label: 'yt-dlp', sizeBytes: 17840399, state: 'ready', progress: 1, optional: false },
+  { id: 'chat-downloader', label: 'TwitchDownloaderCLI', sizeBytes: 52226305, state: 'downloading', progress: 0.42, optional: false },
+  { id: 'whisper-cuda', label: 'whisper.cpp (NVIDIA)', sizeBytes: 272982859, state: 'missing', progress: 0, optional: false },
+  { id: 'model-whisper-large', label: 'Speech model (Whisper large-v3-turbo)', sizeBytes: 874188075, state: 'missing', progress: 0, optional: false },
+  // Optional AI parts, offered again later from the About screen.
+  { id: 'llama', label: 'llama.cpp', sizeBytes: 33064176, state: 'ready', progress: 1, optional: true },
+  { id: 'model-llm-8b', label: 'Language model (Ministral 3 8B)', sizeBytes: 5198911904, state: 'missing', progress: 0, optional: true },
+  { id: 'separator', label: 'Voice separator (demucs.cpp)', sizeBytes: 2102181, state: 'missing', progress: 0, optional: true },
+  { id: 'model-demucs', label: 'Voice separation model (Demucs htdemucs)', sizeBytes: 83994361, state: 'missing', progress: 0, optional: true }
+]
+
+const hardware: HardwareProfile = { gpus: [], primary: { vendor: 'nvidia', name: 'NVIDIA GeForce RTX 3080', vramMb: 10240 }, whisper: 'cuda', llm: 'vulkan', totalRamMb: 16384, cpuThreads: 16 }
+
+let modelsRunning = false
+
 const setup = (): SetupStatus => ({
   ready: setupReady,
-  running: false,
-  components: [
-    { id: 'ffmpeg', label: 'FFmpeg', sizeBytes: 109282242, state: 'ready', progress: 1, optional: false },
-    { id: 'yt-dlp', label: 'yt-dlp', sizeBytes: 17840399, state: 'ready', progress: 1, optional: false },
-    { id: 'chat-downloader', label: 'TwitchDownloaderCLI', sizeBytes: 52226305, state: 'downloading', progress: 0.42, optional: false },
-    { id: 'whisper-cuda', label: 'whisper.cpp (NVIDIA)', sizeBytes: 272982859, state: 'missing', progress: 0, optional: false },
-    { id: 'model-whisper-large', label: 'Speech model (Whisper large-v3-turbo)', sizeBytes: 874188075, state: 'missing', progress: 0, optional: false },
-    { id: 'model-llm-8b', label: 'Language model (Ministral 3 8B)', sizeBytes: 5198911904, state: 'missing', progress: 0, optional: true }
-  ],
+  running: modelsRunning,
+  components: modelComponents,
   remainingBytes: 6_300_000_000,
   freeBytes: 412_000_000_000,
   etaSec: null,
   error: null,
-  hardware: { gpus: [], primary: { vendor: 'nvidia', name: 'NVIDIA GeForce RTX 3080', vramMb: 10240 }, whisper: 'cuda', llm: 'vulkan', totalRamMb: 16384, cpuThreads: 16 }
+  hardware
 })
+
+// Simulates the settings screen's Download/Cancel flow: one artifact at a
+// time moves through downloading -> verifying -> ready, pushed as
+// 'setup:status' events just like the real setup manager.
+let modelTimer: ReturnType<typeof setInterval> | null = null
+
+function stopModelDownload(cancelled: boolean): void {
+  if (modelTimer) clearInterval(modelTimer)
+  modelTimer = null
+  modelsRunning = false
+  if (cancelled) {
+    for (const c of modelComponents) {
+      if (c.state === 'downloading' || c.state === 'verifying' || c.state === 'installing') {
+        c.state = 'missing'
+        c.progress = 0
+      }
+    }
+  }
+  emit('setup:status', setup())
+}
+
+function simulateModelDownload(ids: readonly string[]): void {
+  if (modelsRunning) return
+  const todo = modelComponents.filter((c) => ids.includes(c.id) && c.state !== 'ready')
+  if (!todo.length) return
+  modelsRunning = true
+  let i = 0
+  modelTimer = setInterval(() => {
+    const c = todo[i]
+    if (!c) {
+      stopModelDownload(false)
+      return
+    }
+    c.state = c.progress < 0.8 ? 'downloading' : 'verifying'
+    c.progress = Math.min(1, c.progress + 0.25)
+    if (c.progress >= 1) {
+      c.state = 'ready'
+      i += 1
+    }
+    emit('setup:status', setup())
+  }, 350)
+}
 
 const vod = { id: '2883949120', title: 'Late night ranked grind, road to top 500', channel: 'streamer', durationSec: 5 * 3600 + 1234, createdAt: null, thumbnailUrl: null }
 
@@ -166,6 +221,7 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
     setupReady = true
     emit('setup:status', setup())
   },
+  'setup:cancel': () => stopModelDownload(true),
   'jobs:list': () => jobs,
   'jobs:create': () => ({ ok: false, reason: 'This is the UI preview; no real jobs run here.' }),
   'clips:list': (jobId: string) => clips.filter((c) => c.jobId === jobId),
@@ -223,6 +279,12 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
   'settings:setAutostart': (enabled: boolean) => {
     autostart = { enabled, userSet: true }
     return autostart
+  },
+  'models:download': (id: OptionalModelId) => simulateModelDownload(optionalModelArtifactIds(id, hardware)),
+  'models:remove': (id: OptionalModelId) => {
+    const ids: string[] = optionalModelArtifactIds(id, hardware)
+    for (const c of modelComponents) if (ids.includes(c.id)) { c.state = 'missing'; c.progress = 0 }
+    emit('setup:status', setup())
   }
 }
 

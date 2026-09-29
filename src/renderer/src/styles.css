@@ -488,6 +488,24 @@ kbd {
   margin-top: 6px;
 }
 
+.model-parts {
+  margin-top: 10px;
+}
+.model-part {
+  display: grid;
+  grid-template-columns: 20px 1fr 84px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.model-part:first-child {
+  border-top: none;
+}
+.model-part .bar {
+  margin-top: 6px;
+}
+
 /* ---------- home ---------- */
 
 .paste {

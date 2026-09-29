@@ -13,6 +13,8 @@ const id = z.string().regex(/^[a-z0-9-]{6,64}$/i)
 const unit = z.number().finite().min(0).max(1)
 const seconds = z.number().finite().min(0).max(48 * 3600)
 
+const optionalModelId = z.enum(['llm', 'voiceSeparation'])
+
 export const RectSchema = z.object({ x: unit, y: unit, w: unit.min(0.01), h: unit.min(0.01) }).strict()
 
 export const LayoutSchema = z
@@ -88,7 +90,9 @@ export const Invoke = {
   'channelWatch:set': z.tuple([z.string().max(200)]),
   'channelWatch:clear': z.tuple([]),
   'settings:getAutostart': z.tuple([]),
-  'settings:setAutostart': z.tuple([z.boolean()])
+  'settings:setAutostart': z.tuple([z.boolean()]),
+  'models:download': z.tuple([optionalModelId]),
+  'models:remove': z.tuple([optionalModelId])
 } as const
 
 export type InvokeChannel = keyof typeof Invoke
@@ -138,6 +142,8 @@ export interface InvokeResult {
   'channelWatch:clear': void
   'settings:getAutostart': AutostartStatus
   'settings:setAutostart': AutostartStatus
+  'models:download': void
+  'models:remove': void
 }
 
 /** Events pushed from main to the UI. */

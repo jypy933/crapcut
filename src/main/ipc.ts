@@ -5,12 +5,14 @@ import { dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } f
 import { existsSync } from 'node:fs'
 import { Invoke, type InvokeChannel, type InvokeResult } from '@shared/ipc'
 import type { Events, EventChannel } from '@shared/ipc'
+import { optionalModelArtifactIds, type OptionalModelId } from '@shared/optionalModels'
 import { parseVodUrl } from '@shared/vodUrl'
 import type { Clip } from '@shared/types'
 import { applyClipPatch, resetClip } from './clips'
 import { hasEnoughHistory, type TasteDecision } from './core/taste'
 import { isAppUrl, openExternalSafely } from './security'
 import type { AppServices } from './services'
+import type { ToolId } from './tools/manifest'
 import { UserError } from './util/errors'
 import { logFolder, logger } from './util/log'
 
@@ -19,7 +21,7 @@ const log = logger('ipc')
 type Handler<C extends InvokeChannel> = (...args: never[]) => Promise<InvokeResult[C]> | InvokeResult[C]
 
 export function registerIpc(services: AppServices, getWindow: () => BrowserWindow | null, devServer: string | undefined): void {
-  const { store, runner, exporter, bestOf, setup, updater, paths, channelWatch, autostart } = services
+  const { store, runner, exporter, bestOf, setup, updater, paths, channelWatch, autostart, hardware } = services
 
   const handlers: { [C in InvokeChannel]: Handler<C> } = {
     'app:info': () => services.appInfo(),
@@ -124,7 +126,14 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
     'channelWatch:clear': () => channelWatch.clear(),
 
     'settings:getAutostart': () => autostart.status(),
-    'settings:setAutostart': (enabled: boolean) => autostart.setEnabled(enabled)
+    'settings:setAutostart': (enabled: boolean) => autostart.setEnabled(enabled),
+
+    'models:download': (id: OptionalModelId) => {
+      void setup.start(optionalModelArtifactIds(id, hardware) as ToolId[])
+    },
+    'models:remove': (id: OptionalModelId) => {
+      setup.remove(optionalModelArtifactIds(id, hardware) as ToolId[], () => runner.hasWork() || exporter.hasWork() || bestOf.hasWork())
+    }
   }
 
   function requireClip(id: string): Clip {

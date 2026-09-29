@@ -38,7 +38,9 @@ export const INVOKE_CHANNELS = [
   'channelWatch:set',
   'channelWatch:clear',
   'settings:getAutostart',
-  'settings:setAutostart'
+  'settings:setAutostart',
+  'models:download',
+  'models:remove'
 ] as const
 
 export const EVENT_CHANNELS = ['setup:status', 'jobs:changed', 'exports:changed', 'bestOf:changed', 'app:update', 'channelWatch:changed', 'jobs:focus'] as const

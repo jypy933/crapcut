@@ -2,6 +2,7 @@
 // and SHA-256. Nothing here is bundled in the installer. To update a tool,
 // change its entry (url, sha256, size) and ship a new app release.
 
+import { canRunBigLlm, LLM_8B_MIN_VRAM_MB } from '@shared/hardware'
 import type { HardwareProfile } from '@shared/types'
 
 export type ToolId =
@@ -48,12 +49,7 @@ export interface Artifact {
 const GH = 'https://github.com'
 const HF = 'https://huggingface.co'
 
-/** Enough VRAM for the 8B model (Q4) plus context. */
-export const LLM_8B_MIN_VRAM_MB = 7000
-
-function bigLlm(hw: HardwareProfile): boolean {
-  return hw.llm === 'vulkan' && (hw.primary?.vramMb ?? 0) >= LLM_8B_MIN_VRAM_MB
-}
+export { LLM_8B_MIN_VRAM_MB }
 
 export const ARTIFACTS: readonly Artifact[] = [
   {
@@ -194,7 +190,7 @@ export const ARTIFACTS: readonly Artifact[] = [
     entry: 'Ministral-3-8B-Instruct-2512-Q4_K_M.gguf',
     licence: { name: 'Apache-2.0', url: 'https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF' },
     optional: true,
-    needed: (hw) => bigLlm(hw)
+    needed: (hw) => canRunBigLlm(hw)
   },
   {
     id: 'model-llm-3b',
@@ -207,7 +203,7 @@ export const ARTIFACTS: readonly Artifact[] = [
     entry: 'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
     licence: { name: 'Apache-2.0', url: 'https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF' },
     optional: true,
-    needed: (hw) => !bigLlm(hw)
+    needed: (hw) => !canRunBigLlm(hw)
   },
   {
     id: 'separator',
