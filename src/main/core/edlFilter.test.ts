@@ -222,6 +222,15 @@ describe('edlToFilterGraph / buildEdlRenderArgs', () => {
   it('uses the chosen encoder', () => {
     expect(buildEdlRenderArgs(spec({ encoder: 'h264_nvenc' }))).toContain('h264_nvenc')
   })
+
+  it('adds -ss/-t before the main input only when seek/duration are given', () => {
+    const plain = buildEdlRenderArgs(spec())
+    expect(plain).not.toContain('-ss')
+    expect(plain).not.toContain('-t')
+
+    const seeked = buildEdlRenderArgs(spec({ seek: 12.5, duration: 8 }))
+    expect(seeked.slice(0, 9)).toEqual(['-hide_banner', '-nostdin', '-y', '-ss', '12.500', '-t', '8.000', '-i', 'in.mp4'])
+  })
 })
 
 describe('buildOverlayAss', () => {

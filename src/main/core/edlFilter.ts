@@ -230,8 +230,16 @@ function spliceLoopAudio(parts: string[], pad: string, mainDuration: number, int
 }
 
 export interface EdlRenderSpec {
-  /** The accepted clip's already-rendered/downloaded source file; segments address times inside it. */
+  /**
+   * The accepted clip's already-rendered/downloaded source file; the EDL's
+   * segments address times relative to `seek` inside it (0 = the clip's own
+   * accepted start), never the file's own start.
+   */
   input: string
+  /** Seconds into `input` where the EDL's own time 0 begins; omitted (or 0) when `input` already starts there. */
+  seek?: number
+  /** How much of `input`, from `seek`, ffmpeg needs to read; omitted reads to the end. */
+  duration?: number
   source: Size
   sourceFps: number
   format: RenderFormat
@@ -372,7 +380,10 @@ export function edlToFilterGraph(spec: EdlRenderSpec): { graph: string; audioInp
 export function buildEdlRenderArgs(spec: EdlRenderSpec): string[] {
   const { audioInputs } = edlToFilterGraph(spec)
   const fps = clampFps(spec.sourceFps)
-  const args = ['-hide_banner', '-nostdin', '-y', '-i', spec.input, ...audioInputs.flat(), '-filter_complex_script', spec.filterScript, '-map', '[vout]']
+  const args = ['-hide_banner', '-nostdin', '-y']
+  if (spec.seek) args.push('-ss', spec.seek.toFixed(3))
+  if (spec.duration) args.push('-t', spec.duration.toFixed(3))
+  args.push('-i', spec.input, ...audioInputs.flat(), '-filter_complex_script', spec.filterScript, '-map', '[vout]')
   if (spec.audio.kind !== 'silent') args.push('-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', '-ar', String(SAMPLE_RATE))
   else args.push('-an')
   args.push(...encoderArgs(spec.encoder, fps), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', spec.output)
