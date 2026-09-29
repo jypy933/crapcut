@@ -55,6 +55,22 @@ describe('SetupManager', () => {
     expect(s.remainingBytes).toBeGreaterThan(6e9)
   })
 
+  it('lists the Vulkan whisper build on an AMD card instead of the NVIDIA one', async () => {
+    const amd: HardwareProfile = {
+      gpus: [{ vendor: 'amd', name: 'RX 9060 XT', vramMb: 8144 }],
+      primary: { vendor: 'amd', name: 'RX 9060 XT', vramMb: 8144 },
+      whisper: 'vulkan',
+      llm: 'vulkan',
+      totalRamMb: 32768,
+      cpuThreads: 16
+    }
+    const { registry } = fakeRegistry()
+    const ids = (await new SetupManager(registry, amd, 'C:\\x').status()).components.map((c) => c.id)
+    expect(ids).toContain('whisper-vulkan')
+    expect(ids).toContain('whisper-cpu')
+    expect(ids).not.toContain('whisper-cuda')
+  })
+
   it('installs small tools first and big optional models last', async () => {
     const { registry, order } = fakeRegistry()
     const m = new SetupManager(registry, nvidia, 'C:\\x')

@@ -242,7 +242,7 @@ export interface HardwareProfile {
   /** The GPU used for AI work, if any. */
   primary: GpuInfo | null
   /** What whisper.cpp will run on. */
-  whisper: 'cuda' | 'cpu'
+  whisper: 'cuda' | 'vulkan' | 'cpu'
   /** What llama.cpp will run on. */
   llm: 'vulkan' | 'cpu'
   totalRamMb: number

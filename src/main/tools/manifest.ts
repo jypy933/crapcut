@@ -11,6 +11,7 @@ export type ToolId =
   | 'chat-downloader'
   | 'whisper-cpu'
   | 'whisper-cuda'
+  | 'whisper-vulkan'
   | 'llama'
   | 'model-whisper-large'
   | 'model-whisper-small'
@@ -133,6 +134,24 @@ export const ARTIFACTS: readonly Artifact[] = [
     },
     optional: false,
     needed: (hw) => hw.whisper === 'cuda'
+  },
+  {
+    id: 'whisper-vulkan',
+    label: 'whisper.cpp (AMD)',
+    version: '1.9.4',
+    url: `${GH}/jypy933/crapcut/releases/download/tools-whisper-vulkan-1/whisper-vulkan-bin-x64.zip`,
+    sha256: '9a0c51ac4d2b05108bb2e824fd5082d22dc5f98462f988e6d580c732e01f1cfe',
+    size: 20879168,
+    kind: 'zip',
+    include: /^Release\/(whisper-cli\.exe|whisper\.dll|ggml[\w-]*\.dll|LICENSE)$/,
+    entry: 'Release/whisper-cli.exe',
+    licence: {
+      name: 'MIT',
+      url: 'https://github.com/ggml-org/whisper.cpp/blob/master/LICENSE',
+      note: 'Built by CrapCut CI from whisper.cpp v1.9.4 with the Vulkan backend'
+    },
+    optional: false,
+    needed: (hw) => hw.whisper === 'vulkan'
   },
   {
     id: 'llama',

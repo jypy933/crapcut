@@ -9,7 +9,7 @@ function hardwareLine(s: SetupStatus): string {
   const hw = s.hardware
   if (!hw) return ''
   const gpu = hw.primary?.name ?? 'No graphics card found'
-  const where = hw.whisper === 'cuda' ? 'speech on the graphics card' : 'speech on the processor'
+  const where = hw.whisper !== 'cpu' ? 'speech on the graphics card' : 'speech on the processor'
   return `${gpu} · ${where}`
 }
 

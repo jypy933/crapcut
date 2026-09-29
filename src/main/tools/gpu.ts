@@ -83,7 +83,7 @@ export function parseNvidiaSmi(output: string): { name: string; vramMb: number; 
   return out
 }
 
-/** Minimum VRAM to run whisper large-v3-turbo on the GPU. */
+/** Minimum VRAM to run whisper large-v3-turbo on the GPU (CUDA or Vulkan). */
 export const WHISPER_GPU_MIN_VRAM_MB = 3500
 /** Minimum NVIDIA driver for the CUDA 11.8 whisper build. */
 export const MIN_NVIDIA_DRIVER = 452.39
@@ -93,12 +93,15 @@ export function chooseProfile(gpus: GpuInfo[], nvidiaDriver: number | null, tota
   const primary = [...gpus].filter((g) => g.vendor !== 'other').sort((a, b) => rank(b) - rank(a))[0] ?? null
   const cudaOk =
     primary?.vendor === 'nvidia' && (primary.vramMb ?? 0) >= WHISPER_GPU_MIN_VRAM_MB && (nvidiaDriver === null || nvidiaDriver >= MIN_NVIDIA_DRIVER)
+  // whisper.cpp's Vulkan build covers AMD cards that have no CUDA. NVIDIA without a
+  // usable CUDA path stays on the CPU: that combination is not one we can test.
+  const whisperVulkanOk = !cudaOk && primary?.vendor === 'amd' && (primary.vramMb ?? 0) >= WHISPER_GPU_MIN_VRAM_MB
   // Vulkan (llama.cpp) is worth it on dedicated NVIDIA/AMD cards with enough memory.
   const vulkanOk = !!primary && (primary.vendor === 'nvidia' || primary.vendor === 'amd') && (primary.vramMb ?? 0) >= 4000
   return {
     gpus,
     primary,
-    whisper: cudaOk ? 'cuda' : 'cpu',
+    whisper: cudaOk ? 'cuda' : whisperVulkanOk ? 'vulkan' : 'cpu',
     llm: vulkanOk ? 'vulkan' : 'cpu',
     totalRamMb,
     cpuThreads

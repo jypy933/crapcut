@@ -54,10 +54,31 @@ describe('chooseProfile', () => {
   it('falls back to CPU whisper on old NVIDIA drivers', () => {
     expect(chooseProfile([{ vendor: 'nvidia', name: 'x', vramMb: 10240 }], 391.0, 16384, 16).whisper).toBe('cpu')
   })
-  it('uses CPU whisper and Vulkan LLM on AMD', () => {
+  it('uses Vulkan for whisper and the LLM on AMD', () => {
     const p = chooseProfile([{ vendor: 'amd', name: 'RX 9060 XT', vramMb: 8144 }], null, 32768, 16)
-    expect(p).toMatchObject({ whisper: 'cpu', llm: 'vulkan' })
+    expect(p).toMatchObject({ whisper: 'vulkan', llm: 'vulkan' })
     expect(p.primary?.name).toBe('RX 9060 XT')
+  })
+  it('keeps whisper on the CPU on an AMD card with too little memory', () => {
+    const p = chooseProfile([{ vendor: 'amd', name: 'Radeon Graphics', vramMb: 512 }], null, 16384, 16)
+    expect(p).toMatchObject({ whisper: 'cpu', llm: 'cpu' })
+    expect(chooseProfile([{ vendor: 'amd', name: 'RX 6400', vramMb: 3000 }], null, 16384, 16).whisper).toBe('cpu')
+  })
+  it('does not use Vulkan for whisper on integrated Intel graphics or an unknown memory size', () => {
+    expect(chooseProfile([{ vendor: 'intel', name: 'Arc', vramMb: 8192 }], null, 16384, 16).whisper).toBe('cpu')
+    expect(chooseProfile([{ vendor: 'amd', name: 'RX', vramMb: null }], null, 16384, 16).whisper).toBe('cpu')
+  })
+  it('prefers CUDA over Vulkan when both an NVIDIA and an AMD card are present', () => {
+    const p = chooseProfile(
+      [
+        { vendor: 'amd', name: 'RX 9060 XT', vramMb: 8144 },
+        { vendor: 'nvidia', name: 'RTX 3080', vramMb: 10240 }
+      ],
+      581.0,
+      16384,
+      16
+    )
+    expect(p.whisper).toBe('cuda')
   })
   it('prefers the dedicated card over integrated graphics', () => {
     const p = chooseProfile(
