@@ -20,3 +20,9 @@ Local installer build (not for distribution): `npm run dist` -> `release/`.
 - Run `npm run e2e` with a short public VOD (`E2E_VOD=https://www.twitch.tv/videos/<id>`).
 - Run `npm run test:ui` with the same `E2E_VOD` for the click-through test.
 - Install the built setup on a clean Windows user account and do one VOD.
+
+## Dependency updates
+
+Dependabot pull requests are merged automatically once CI passes on them
+(`.github/workflows/dependabot-merge.yml`). Nothing ships until a release is
+tagged, so check `main` before tagging.

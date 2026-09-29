@@ -1,0 +1,40 @@
+name: Merge dependency updates
+
+# Merges a Dependabot pull request once CI has passed on it. Runs in the base
+# repository after CI finishes and never checks out the pull request's code.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          pr=$(gh pr list --head "$HEAD_BRANCH" --state open --json number,author --jq '.[] | select(.author.login == "app/dependabot") | .number' | head -n 1)
+          if [ -z "$pr" ]; then
+            echo "No open Dependabot pull request for this branch."
+            exit 0
+          fi
+          # Only merge the exact commit CI tested; a newer push waits for its own run.
+          gh pr merge "$pr" --merge --delete-branch --match-head-commit "$HEAD_SHA"
