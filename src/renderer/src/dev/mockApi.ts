@@ -53,7 +53,7 @@ const jobs: JobSummary[] = [
     error: null,
     createdAt: Date.now() - 3600_000,
     updatedAt: Date.now(),
-    clipCount: 6
+    clipCount: 7
   },
   {
     id: 'job-aaaaaa02',
@@ -110,6 +110,36 @@ let clips: Clip[] = titles.map((title, i) => {
     reason: i % 2 ? 'Chat spike · laughter' : 'Chat spike · hype · loud',
     signals: { chatZ: 3.2, audioZ: 1.1, score: 0.7, rating: 7, source: i % 2 ? 'chat' : 'audio' }
   }
+})
+// Dev-only regression fixture for the Timeline trim bar: word marks whose
+// range runs wider than the clip's downloaded source on both sides, plus one
+// stretched (whisper-style) word, so an unclamped bar would draw past its
+// edges. See src/renderer/src/components/Timeline.tsx.
+clips.push({
+  id: 'clip-timelinetest',
+  jobId: 'job-aaaaaa01',
+  rank: clips.length + 1,
+  score: 0.5,
+  title: 'Timeline overflow fixture',
+  start: 5006,
+  end: 5024,
+  suggested: { start: 5006, end: 5024 },
+  source: { start: 5005, end: 5025 },
+  status: 'pending',
+  words: [
+    { t0: 4996, t1: 5008, text: 'before' }, // crosses the left edge of source
+    { t0: 5008, t1: 5010, text: 'okay' },
+    { t0: 5010, t1: 5021, text: 'stretchedword' }, // an 11 s "word": the whisper stretch bug
+    { t0: 5021, t1: 5023, text: 'right' },
+    { t0: 5023, t1: 5040, text: 'after' } // crosses the right edge of source
+  ],
+  captions: { enabled: true, y: 0.72, uppercase: true, styleId: 'clean' },
+  audio: 'original',
+  musicPath: null,
+  layoutId: null,
+  formats: { vertical: true, horizontal: false },
+  reason: 'Dev fixture',
+  signals: { chatZ: 0, audioZ: 0, score: 0.5, rating: null, source: 'audio' }
 })
 let layouts: Layout[] = []
 let exports: ExportItem[] = []
