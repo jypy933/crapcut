@@ -1,12 +1,9 @@
 // Parses TwitchDownloaderCLI's .txt chat log ("[H:MM:SS] user: message", relative
 // timestamps) into compact messages. Streaming-friendly: one line at a time.
 
-export interface ChatMessage {
-  /** Seconds from the start of the VOD. */
-  t: number
-  user: string
-  text: string
-}
+import type { ChatMessage } from '@shared/types'
+
+export type { ChatMessage }
 
 const LINE = /^\[(\d+):(\d{2}):(\d{2})\]\s+([^:\s][^:]*?):\s?(.*)$/
 

@@ -16,6 +16,8 @@ const clip: Clip = {
   status: 'pending',
   words: [],
   captions: { enabled: true, y: 0.7, uppercase: true, styleId: 'clean' },
+  chatMessages: [],
+  chatOverlay: false,
   audio: 'original',
   musicPath: null,
   layoutId: null,

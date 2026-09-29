@@ -6,8 +6,9 @@ import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { clipWords } from '@shared/captions'
 import { captionStyle } from '@shared/captionStyles'
+import { buildChatOverlay, chatOverlayGeometry, DEFAULT_CHAT_OVERLAY_OPTIONS } from '@shared/chatOverlay'
 import type { Clip, ExportFormat, HardwareProfile, Layout } from '@shared/types'
-import { buildAss, defaultAssStyle } from '../core/ass'
+import { buildAss, defaultAssStyle, type ChatOverlayAssInput } from '../core/ass'
 import { EtaEstimator } from '../core/eta'
 import { buildLoudnessMeasureArgs, buildRenderArgs, parseLoudnessMeasure, parseProgressSeconds, type AudioPlan, type EncoderId, type RenderSpec } from '../core/render'
 import { jobDir, type AppPaths } from '../paths'
@@ -65,16 +66,24 @@ export async function renderClipToFile(
   mkdirSync(join(workDir, 'fonts'), { recursive: true })
   // Only Montserrat needs bundling; other preset fonts are already on Windows.
   copyFileSync(join(deps.paths.resources, 'fonts', 'Montserrat-Black.ttf'), join(workDir, 'fonts', 'Montserrat-Black.ttf'))
+  const layout = (clip.layoutId ? deps.store.layout(clip.layoutId) : null) ?? DEFAULT_LAYOUT
+
   let assFile: string | null = null
-  if (clip.captions.enabled) {
-    const words = clipWords(clip.words, start, end)
+  const captionsOn = clip.captions.enabled
+  const chatOn = clip.chatOverlay && clip.chatMessages.length > 0
+  if (captionsOn || chatOn) {
+    const words = captionsOn ? clipWords(clip.words, start, end) : []
     const y = format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1))
     const style = captionStyle(clip.captions.styleId)
-    writeFileSync(join(workDir, 'captions.ass'), buildAss(words, defaultAssStyle(format, y, clip.captions.uppercase, style)))
+    let chat: ChatOverlayAssInput | undefined
+    if (chatOn) {
+      const geometry = chatOverlayGeometry(format, layout, { width: media.width, height: media.height }, captionsOn ? y : null)
+      const lines = buildChatOverlay(clip.chatMessages, start, end, geometry)
+      if (lines.length > 0) chat = { lines, font: { fontName: 'Segoe UI', fontSize: DEFAULT_CHAT_OVERLAY_OPTIONS.fontSize } }
+    }
+    writeFileSync(join(workDir, 'captions.ass'), buildAss(words, defaultAssStyle(format, y, clip.captions.uppercase, style), chat))
     assFile = 'captions.ass'
   }
-
-  const layout = (clip.layoutId ? deps.store.layout(clip.layoutId) : null) ?? DEFAULT_LAYOUT
 
   // Audio: original, or stems for the voice options (separated only for this clip).
   let audio: AudioPlan = media.hasAudio ? { kind: 'original' } : { kind: 'silent' }

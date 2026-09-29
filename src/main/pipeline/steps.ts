@@ -8,6 +8,7 @@ import { join, relative } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Clip, HardwareProfile, JobSummary, MomentSource, Range, StepId, VodInfo, Word } from '@shared/types'
 import { DEFAULT_CAPTION_STYLE, isCaptionStyleId } from '@shared/captionStyles'
+import { chatIn } from '@shared/chatOverlay'
 import { isStretchedWord, repairWordTimings } from '@shared/wordTiming'
 import { bestLag, envelope, pcm16ToFloat } from '../core/align'
 import { parseChatLog } from '../core/chat'
@@ -377,6 +378,8 @@ async function moments(ctx: StepContext): Promise<void> {
     status: 'pending',
     words: wordsIn(words, p.window.start - CLIP_PAD_SEC, p.window.end + CLIP_PAD_SEC),
     captions: { enabled: true, y: 0.72, uppercase: true, styleId: defaultStyleId },
+    chatMessages: chatIn(messages, p.window.start - CLIP_PAD_SEC, p.window.end + CLIP_PAD_SEC),
+    chatOverlay: false,
     audio: 'original',
     musicPath: null,
     layoutId: defaultLayoutId && ctx.store.layout(defaultLayoutId) ? defaultLayoutId : null,

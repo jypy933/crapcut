@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { captionAt, clipWords, displayText, groupWords, isKeywordWord } from '@shared/captions'
 import { captionStyle } from '@shared/captionStyles'
-import type { RenderFormat } from '@shared/layoutGeometry'
+import { buildChatOverlay, chatOverlayGeometry, DEFAULT_CHAT_OVERLAY_OPTIONS } from '@shared/chatOverlay'
+import { OUTPUT_SIZE, type RenderFormat } from '@shared/layoutGeometry'
 import type { Clip, Layout } from '@shared/types'
 import { drawFrame } from '../lib/compose'
 import { Spinner } from './ui'
@@ -25,6 +26,8 @@ export function Preview({ clip, src, layout, format, videoRef, time, onTime, onP
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [ready, setReady] = useState(false)
   const [dragY, setDragY] = useState<number | null>(null)
+  // The clip's own source video, for facecam geometry; a plausible guess until it loads.
+  const [naturalSize, setNaturalSize] = useState({ width: 1920, height: 1080 })
   const aspect = format === 'vertical' ? 9 / 16 : 16 / 9
   const sourceStart = clip.source?.start ?? 0
 
@@ -78,6 +81,7 @@ export function Preview({ clip, src, layout, format, videoRef, time, onTime, onP
     }
     const onReady = (): void => {
       setReady(true)
+      if (v.videoWidth && v.videoHeight) setNaturalSize({ width: v.videoWidth, height: v.videoHeight })
       draw()
     }
     v.addEventListener('play', onPlay)
@@ -115,6 +119,24 @@ export function Preview({ clip, src, layout, format, videoRef, time, onTime, onP
   const y = dragY ?? (format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1)))
   const fontPx = size.h * (format === 'vertical' ? 88 / 1920 : 72 / 1080)
   const strokePx = style.box ? 0 : size.h * (format === 'vertical' ? (7 * 2) / 1920 : (6 * 2) / 1080) * style.outlineScale
+
+  // Chat overlay: an approximation of the burned-in look, same placement logic.
+  // A clip saved before the chat overlay existed has neither field yet (main
+  // normalises on read, but this stays cheap insurance).
+  const chatMessages = clip.chatMessages ?? []
+  const out = OUTPUT_SIZE[format]
+  const captionYForChat = clip.captions.enabled ? (format === 'vertical' ? clip.captions.y : Math.max(0.6, Math.min(0.92, clip.captions.y + 0.1))) : null
+  const chatGeometry = useMemo(
+    () => ((clip.chatOverlay ?? false) && chatMessages.length > 0 ? chatOverlayGeometry(format, layout, naturalSize, captionYForChat) : null),
+    [clip.chatOverlay, chatMessages.length, format, layout, naturalSize, captionYForChat]
+  )
+  const chatLines = useMemo(
+    () => (chatGeometry ? buildChatOverlay(chatMessages, clip.start, clip.end, chatGeometry) : []),
+    [chatGeometry, chatMessages, clip.start, clip.end]
+  )
+  const chatNow = time - clip.start
+  const activeChat = chatLines.filter((l) => chatNow >= l.start && chatNow < l.end)
+  const chatFontPx = size.h * (DEFAULT_CHAT_OVERLAY_OPTIONS.fontSize / out.height)
 
   function startDrag(e: React.PointerEvent): void {
     if (format !== 'vertical') return
@@ -172,6 +194,34 @@ export function Preview({ clip, src, layout, format, videoRef, time, onTime, onP
                 </span>
               )
             })}
+          </div>
+        )}
+        {chatGeometry && activeChat.length > 0 && (
+          <div
+            className="chat-box"
+            style={{
+              top: `${(chatGeometry.y / out.height) * 100}%`,
+              left: `${(chatGeometry.x / out.width) * 100}%`,
+              width: `${(chatGeometry.w / out.width) * 100}%`,
+              height: `${(chatGeometry.h / out.height) * 100}%`
+            }}
+          >
+            {activeChat.map((l, i) => (
+              <div
+                key={`${l.user}-${l.start}-${i}`}
+                className={`chat-line${l.align === 'right' ? ' right' : ''}`}
+                style={{
+                  top: `${((l.y - chatGeometry.y) / chatGeometry.h) * 100}%`,
+                  textAlign: l.align,
+                  fontSize: chatFontPx
+                }}
+              >
+                <span className="chat-user" style={{ color: l.color }}>
+                  {l.user}
+                </span>
+                : {l.messageLines.join(' ')}
+              </div>
+            ))}
           </div>
         )}
       </div>

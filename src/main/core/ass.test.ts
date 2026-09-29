@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { captionAt, clipWords, groupWords } from '@shared/captions'
 import { CAPTION_STYLES, captionStyle } from '@shared/captionStyles'
-import type { Word } from '@shared/types'
-import { assColor, assEscape, assTime, buildAss, defaultAssStyle, inlineColor } from './ass'
+import { buildChatOverlay, chatOverlayGeometry, type ChatOverlayLine } from '@shared/chatOverlay'
+import type { ChatMessage, Layout, Word } from '@shared/types'
+import { assColor, assEscape, assTime, buildAss, defaultAssStyle, inlineColor, type ChatOverlayAssInput } from './ass'
 
 const w = (t0: number, t1: number, text: string): Word => ({ t0, t1, text })
 
@@ -144,5 +145,55 @@ describe('caption style presets', () => {
   it('a style with pop grows the first word in', () => {
     const ass = buildAss([w(0, 0.4, 'hey')], defaultAssStyle('vertical', 0.7, false, captionStyle('clean')))
     expect(ass).toContain('\\fscx88')
+  })
+})
+
+describe('chat overlay in the ASS file', () => {
+  const chatMsg = (t: number, user: string, text: string): ChatMessage => ({ t, user, text })
+  const layout: Layout = { id: 'l', name: 'Full frame', kind: 'blur_fill', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } }
+  const source = { width: 1920, height: 1080 }
+  const font = { fontName: 'Segoe UI', fontSize: 34 }
+
+  function chatFor(messages: ChatMessage[], clipStart: number, clipEnd: number): ChatOverlayLine[] {
+    const geometry = chatOverlayGeometry('vertical', layout, source, 0.72)
+    return buildChatOverlay(messages, clipStart, clipEnd, geometry)
+  }
+
+  it('adds no chat style or events when there are no lines', () => {
+    const ass = buildAss([w(0, 0.4, 'hey')], defaultAssStyle('vertical', 0.7, true), { lines: [], font })
+    expect(ass).not.toContain('Style: Chat,')
+    expect(ass.split('\n').filter((l) => l.startsWith('Dialogue:'))).toHaveLength(1)
+  })
+
+  it('adds a Chat style with an opaque per-line box', () => {
+    const lines = chatFor([chatMsg(10, 'zap', 'hello there')], 10, 20)
+    const ass = buildAss([], defaultAssStyle('vertical', 0.7, true), { lines, font } satisfies ChatOverlayAssInput)
+    const chatStyle = ass.split('\n').find((l) => l.startsWith('Style: Chat,'))!
+    expect(chatStyle).toBeDefined()
+    expect(chatStyle.split(',')[15]).toBe('3') // BorderStyle: opaque box, like the boxed caption preset
+  })
+
+  it('emits one chat Dialogue per placed line, positioned and timed by the overlay layout', () => {
+    const lines = chatFor([chatMsg(10, 'zap', 'hello'), chatMsg(11, 'bob', 'world')], 10, 20)
+    const ass = buildAss([], defaultAssStyle('vertical', 0.7, true), { lines, font })
+    const chatDialogues = ass.split('\n').filter((l) => l.startsWith('Dialogue: 1,'))
+    expect(chatDialogues.length).toBe(lines.length)
+    for (const line of lines) {
+      expect(ass).toContain(`\\pos(${Math.round(line.x)},${Math.round(line.y)})`)
+    }
+  })
+
+  it('fades in the newest line only', () => {
+    const lines = chatFor([chatMsg(10, 'zap', 'hi'), chatMsg(11, 'bob', 'yo')], 10, 20)
+    const ass = buildAss([], defaultAssStyle('vertical', 0.7, true), { lines, font })
+    expect(ass).toContain('\\fad(')
+  })
+
+  it('colours the user name and escapes ASS-special characters', () => {
+    const lines = chatFor([chatMsg(10, 'a{b}', 'hi \\world')], 10, 20)
+    const ass = buildAss([], defaultAssStyle('vertical', 0.7, true), { lines, font })
+    expect(ass).toContain('(b)')
+    expect(ass).not.toContain('{b}')
+    expect(ass).toMatch(/\\c&H[0-9A-F]{6}&\}a\(b\)/)
   })
 })

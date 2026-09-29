@@ -63,6 +63,24 @@ an ASS file with one event per word (the spoken word, and with some presets
 shouted/number words, are highlighted). `shared/layoutGeometry.ts` computes
 the facecam/game crops for both the canvas preview and FFmpeg.
 
+### Chat overlay
+
+A per-clip toggle (off by default) shows the clip's chat as a small
+translucent box of the last few messages, scrolling up as new ones arrive.
+`shared/chatOverlay.ts` is the pure layout: it windows the clip's chat
+messages (saved on the clip like `words`, padded the same way), spreads
+messages that land in the same second (the chat log only has 1-second
+timestamps) so they do not pop in together, stacks them newest-at-the-bottom
+with older ones scrolling off after a few more arrive, wraps/truncates long
+messages, and places the box below the facecam (when there is one) and clear
+of the captions, for both 9:16 and 16:9. `core/ass.ts` turns those lines into
+a second ASS style/layer (`buildAss`'s optional `chat` argument) in the same
+file the captions use, so `clipRender.ts` burns both in with one `ass=`
+filter; the review preview (`components/Preview.tsx`) draws its own
+approximation of the same layout for the toggle to feel immediate. Emotes are
+left as plain text; libass's Windows font fallback already renders emoji, CJK
+and RTL-marked names without the bundled caption font showing broken glyphs.
+
 ### Clip timing
 
 Section downloads can start a little off the requested time. After each clip

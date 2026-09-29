@@ -10,6 +10,7 @@ import { parseVodUrl } from '@shared/vodUrl'
 import type { Clip } from '@shared/types'
 import { applyClipPatch, resetClip } from './clips'
 import { hasEnoughHistory, type TasteDecision } from './core/taste'
+import { ensureClipNormalized, ensureClipsNormalized } from './pipeline/clipNormalize'
 import { isAppUrl, openExternalSafely } from './security'
 import type { AppServices } from './services'
 import type { ToolId } from './tools/manifest'
@@ -62,9 +63,9 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
     'jobs:cancel': (id: string) => runner.cancel(id),
     'jobs:delete': (id: string) => runner.delete(id),
 
-    'clips:list': (jobId: string) => store.clips(jobId),
-    'clips:update': (clipId: string, patch) => {
-      const clip = requireClip(clipId)
+    'clips:list': (jobId: string) => ensureClipsNormalized(store, paths, store.clips(jobId)),
+    'clips:update': async (clipId: string, patch) => {
+      const clip = await requireClip(clipId)
       const job = store.job(clip.jobId)
       const next = applyClipPatch(clip, patch as never, (id) => !!store.layout(id), job?.vod?.durationSec ?? clip.end)
       store.saveClip(next)
@@ -73,14 +74,14 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
       if (next.captions.styleId !== clip.captions.styleId) store.set('defaultCaptionStyleId', next.captions.styleId)
       return next
     },
-    'clips:reset': (clipId: string) => {
-      const next = resetClip(requireClip(clipId))
+    'clips:reset': async (clipId: string) => {
+      const next = resetClip(await requireClip(clipId))
       store.saveClip(next)
       syncTasteDecision(next)
       return next
     },
     'clips:pickMusic': async (clipId: string) => {
-      const clip = requireClip(clipId)
+      const clip = await requireClip(clipId)
       const win = getWindow()
       const opts = { title: 'Choose music', properties: ['openFile' as const], filters: [{ name: 'Music', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus'] }] }
       const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
@@ -136,10 +137,10 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
     }
   }
 
-  function requireClip(id: string): Clip {
+  async function requireClip(id: string): Promise<Clip> {
     const clip = store.clip(id)
     if (!clip) throw new UserError('That clip no longer exists.', { retryable: false })
-    return clip
+    return ensureClipNormalized(store, paths, clip)
   }
 
   /** Keeps the taste history in step with a clip's current decision and cut. */

@@ -337,6 +337,9 @@ function Inspector({
   const words = useMemo(() => repairWordTimings(clip.words), [clip.words])
   const groups = useMemo(() => groupWords(clipWords(words, clip.start, clip.end)), [words, clip.start, clip.end])
   const edited = clip.start !== clip.suggested.start || clip.end !== clip.suggested.end
+  // A clip saved before the chat overlay existed has neither field yet (main
+  // normalises on read, but this stays cheap insurance).
+  const chatMessages = clip.chatMessages ?? []
 
   return (
     <aside className="inspector">
@@ -417,6 +420,20 @@ function Inspector({
             <div className="small faint">Drag the captions on the video to move them.</div>
           </>
         )}
+      </Field>
+
+      <Field
+        label="Chat"
+        right={
+          <Toggle
+            on={clip.chatOverlay ?? false}
+            label="Chat"
+            disabled={chatMessages.length === 0}
+            onChange={(chatOverlay) => onUpdate({ chatOverlay })}
+          />
+        }
+      >
+        {chatMessages.length === 0 && <div className="small faint">No chat in this clip's time range.</div>}
       </Field>
 
       <Field label="Audio">
