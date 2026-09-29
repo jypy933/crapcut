@@ -5,6 +5,7 @@
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { runWithDtwFallback } from '../core/dtwGate'
 import { parseVadSpans, type VadSpan } from '../core/transcript'
 import { runTool, killTree, ToolFailedError } from '../tools/process'
 import { LLM_SLOT_CTX, withPathDirs } from '../core/llmBackend'
@@ -81,8 +82,10 @@ export function parseWhisperProgress(line: string): number | null {
 export interface WhisperChunkResult {
   /** Where VAD kept speech (see `parseVadSpans`), or null when VAD was off. */
   vad: VadSpan[] | null
-  /** False when the run with DTW failed and the chunk was redone without it. */
+  /** Whether the run that wrote the output had DTW on. */
   dtw: boolean
+  /** True when a run with DTW failed and the output is from the redo without it. */
+  dtwFailed: boolean
 }
 
 export async function whisperChunk(o: WhisperChunkOptions): Promise<WhisperChunkResult> {
@@ -96,16 +99,15 @@ export async function whisperChunk(o: WhisperChunkOptions): Promise<WhisperChunk
     await runTool(o.whisper, whisperArgs({ ...o, dtw }), { cwd: o.cwd, signal: o.signal, lowPriority: true, onStderr: onLine, onStdout: onLine })
     return o.vadModel ? parseVadSpans(vadLines) : null
   }
-  if (!o.dtw) return { vad: await run(null), dtw: false }
-  try {
-    return { vad: await run(o.dtw), dtw: true }
-  } catch (err) {
-    if (err instanceof CancelledError) throw err
-    // DTW is the least tested part of whisper.cpp on some GPUs: before
-    // blaming the GPU, try the same run with the plain word timestamps.
-    log.warn('speech recognition with DTW word timing failed; retrying without it', err)
-    return { vad: await run(null), dtw: false }
-  }
+  // DTW is the least tested part of whisper.cpp on some GPUs: before blaming
+  // the GPU, try the same run with the plain word timestamps.
+  const r = await runWithDtwFallback(
+    o.dtw,
+    run,
+    (err) => err instanceof CancelledError,
+    (err) => log.warn('speech recognition with DTW word timing failed; retrying without it', err)
+  )
+  return { vad: r.result, dtw: r.dtw, dtwFailed: r.retried }
 }
 
 async function freePort(): Promise<number> {

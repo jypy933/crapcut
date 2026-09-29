@@ -88,8 +88,20 @@ export function parseVadSpans(lines: string[]): VadSpan[] {
  */
 export const DTW_LAG_SEC = 0.2
 
-/** whisper.cpp keeps this much audio after each VAD stretch; a word may run into it. */
+/** whisper.cpp keeps this much audio after each VAD stretch; a word's DTW time may fall into it. */
 const VAD_TAIL_SEC = 0.1
+
+/**
+ * VAD only closes a stretch after about 100 ms of silence, so the voice has
+ * stopped roughly this long before the end whisper reports. The last word
+ * before a pause ends this much earlier: on speech with exactly known word
+ * times, ends before pauses were ~180 ms late and are now within ~100 ms, and
+ * on real streams the trimmed 100 ms was silent in about 96% of words.
+ */
+const VAD_END_TRIM_SEC = 0.1
+
+/** A word is never cut shorter than this by the end of its VAD stretch. */
+const MIN_SPAN_WORD_SEC = 0.1
 
 /** Moves a time in the speech-only audio back onto the audio file, with the stretch it falls in. */
 export function vadToOriginal(t: number, spans: VadSpan[]): { t: number; span: VadSpan } | null {
@@ -146,7 +158,7 @@ export function parseWhisperJson(json: unknown, timing?: WhisperTiming): { langu
   }
   const dtwWords = timing ? applyDtw(words, timing) : null
   const plain = words.map(({ t0, t1, text }) => ({ t0, t1, text }))
-  return { language, words: tidyWords(dtwWords ?? plain), dtw: dtwWords !== null }
+  return { language, words: dropTailPileup(tidyWords(dtwWords ?? plain)), dtw: dtwWords !== null }
 }
 
 /** DTW time (seconds) of a segment's first real token, or null. */
@@ -164,8 +176,9 @@ function segmentDtw(seg: WhisperSegment): number | null {
  * Word times from DTW starts: each word starts at its DTW time less the
  * measured lag, never before the VAD stretch it is in (VAD finds the start
  * of speech very precisely), and ends at the next word, a plausible length
- * for its text, or the end of its stretch, whichever comes first -- so words
- * never run on into a pause. Null when any word has no DTW time.
+ * for its text, or the end of its stretch (less `VAD_END_TRIM_SEC`),
+ * whichever comes first -- so words never run on into a pause. Null when any
+ * word has no DTW time.
  */
 function applyDtw(words: ParsedWord[], timing: WhisperTiming): Word[] | null {
   if (words.length === 0 || words.some((w) => w.dtw === null)) return null
@@ -175,11 +188,11 @@ function applyDtw(words: ParsedWord[], timing: WhisperTiming): Word[] | null {
     const mapped = timing.vad ? vadToOriginal(w.dtw!, timing.vad)! : null
     const raw = mapped ? mapped.t : w.dtw!
     const floor = Math.max(mapped ? mapped.span.start : 0, placed[placed.length - 1]?.t0 ?? 0)
-    placed.push({ t0: Math.round(Math.max(floor, raw - DTW_LAG_SEC) * 1000) / 1000, text: w.text, spanEnd: mapped ? mapped.span.end + VAD_TAIL_SEC : Infinity })
+    placed.push({ t0: Math.round(Math.max(floor, raw - DTW_LAG_SEC) * 1000) / 1000, text: w.text, spanEnd: mapped ? mapped.span.end - VAD_END_TRIM_SEC : Infinity })
   }
   return placed.map((w, i) => {
     const next = placed[i + 1]
-    const t1 = Math.min(next ? next.t0 : Infinity, w.t0 + maxPlausibleDuration(w.text), w.spanEnd)
+    const t1 = Math.min(next ? next.t0 : Infinity, w.t0 + maxPlausibleDuration(w.text), Math.max(w.spanEnd, w.t0 + MIN_SPAN_WORD_SEC))
     return { t0: w.t0, t1: Math.max(w.t0, t1), text: w.text }
   })
 }
@@ -222,6 +235,19 @@ export function placeChunkWords(words: Word[], range: Range, slackSec = 1): { wo
   return { words: out, dropped: words.length - out.length }
 }
 
+/**
+ * A chunk cut in the middle of a word can make whisper carry on past the end
+ * of the audio ("... 6 7 8 9 10" from a count cut after 6); all those words
+ * come out stamped at the same instant, the end of the audio. The next chunk
+ * hears (and transcribes) the real ones, so keep only the first of such a run
+ * at the very end. Both timestamp kinds do this.
+ */
+export function dropTailPileup(words: Word[], spreadSec = 0.02, minRun = 3): Word[] {
+  let from = words.length - 1
+  while (from > 0 && Math.abs(words[from - 1]!.t0 - words[words.length - 1]!.t0) <= spreadSec) from--
+  return words.length - from >= minRun ? words.slice(0, from + 1) : words
+}
+
 /** Sorts words, removes overlaps and long hallucinated repeats. */
 export function tidyWords(words: Word[]): Word[] {
   const sorted = words.map((w) => ({ ...w })).sort((a, b) => a.t0 - b.t0)
@@ -256,13 +282,25 @@ function normalise(s: string): string {
   return s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
 }
 
+/** The same word from the two chunks either side of a seam, this close in time, is one word. */
+const SEAM_TWIN_SEC = 0.35
+
 /** Merges per-chunk word lists, keeping each chunk's words inside its range. */
 export function mergeChunks(chunks: { range: Range; words: Word[] }[]): Word[] {
-  const all: Word[] = []
-  for (const c of chunks) for (const w of c.words) if (w.t0 >= c.range.start - 0.5 && w.t0 < c.range.end) all.push(w)
-  // Chunks are cut in quiet spots, but drop exact duplicates at the seams anyway.
-  const sorted = all.sort((a, b) => a.t0 - b.t0)
-  const unique = sorted.filter((w, i) => i === 0 || !(Math.abs(w.t0 - sorted[i - 1]!.t0) < 0.05 && w.text === sorted[i - 1]!.text))
+  const all: { w: Word; chunk: number }[] = []
+  chunks.forEach((c, chunk) => {
+    for (const w of c.words) if (w.t0 >= c.range.start - 0.5 && w.t0 < c.range.end) all.push({ w, chunk })
+  })
+  // Chunks are cut in quiet spots, but a word heard by both sides of a seam
+  // (each timed a little differently, DTW especially) must show up once.
+  all.sort((a, b) => a.w.t0 - b.w.t0)
+  const unique: Word[] = []
+  let prev: { w: Word; chunk: number } | null = null
+  for (const cur of all) {
+    const twin = prev !== null && normalise(prev.w.text) === normalise(cur.w.text) && cur.w.t0 - prev.w.t0 < (prev.chunk === cur.chunk ? 0.05 : SEAM_TWIN_SEC)
+    if (!twin) unique.push(cur.w)
+    prev = cur
+  }
   return tidyWords(unique)
 }
 

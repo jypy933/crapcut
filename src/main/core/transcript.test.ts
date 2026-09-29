@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeChunks, packWords, parseVadSpans, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, vadToOriginal, wordsIn } from './transcript'
+import { dropTailPileup, mergeChunks, packWords, parseVadSpans, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, vadToOriginal, wordsIn } from './transcript'
 
 /** A 10 ms-frame envelope: mostly a quiet floor, loud during the given [start, end) frame ranges. */
 function fakeEnvelope(frames: number, loudRanges: [number, number][], floor = 0.01, loud = 0.5): Float32Array {
@@ -150,6 +150,20 @@ describe('parseWhisperJson with DTW word times', () => {
     expect(r.words[1]!.t0).toBeGreaterThanOrEqual(r.words[0]!.t0)
   })
 
+  it('ends the last word before a pause inside its VAD stretch, less the silence VAD waits for', () => {
+    // "yeah" is said at 3.0-3.4 s; VAD closes the stretch at 3.5 s (after ~100 ms of silence).
+    const vad = [{ start: 3, end: 3.5, vadStart: 0 }]
+    const r = parseWhisperJson({ transcription: [seg(3000, 3600, ' yeah', 20)] }, { vad })
+    expect(r.words[0]!.t0).toBeCloseTo(3.0)
+    expect(r.words[0]!.t1).toBeCloseTo(3.4)
+  })
+
+  it('never cuts a word below a minimum length at the end of its stretch', () => {
+    const vad = [{ start: 3, end: 3.15, vadStart: 0 }]
+    const r = parseWhisperJson({ transcription: [seg(3000, 3200, ' a', 30)] }, { vad })
+    expect(r.words[0]!.t1 - r.words[0]!.t0).toBeGreaterThanOrEqual(0.09)
+  })
+
   it('joins word pieces and keeps the first piece start', () => {
     const r = parseWhisperJson({ transcription: [seg(0, 200, ' don', 40), seg(200, 400, "'t", 55), seg(400, 600, ' go', 70)] }, { vad: null })
     expect(r.words.map((w) => [w.text, +w.t0.toFixed(2)])).toEqual([
@@ -238,5 +252,76 @@ describe('repairChunkWordTimings', () => {
     const env = fakeEnvelope(1300, [[0, 1200]])
     const words = [{ t0: 0.71, t1: 11.93, text: 'Mind' }]
     expect(repairChunkWordTimings(words, env, frameSec)).toEqual(words)
+  })
+})
+
+describe('dropTailPileup', () => {
+  const at = (t: number, text: string) => ({ t0: t, t1: t, text })
+
+  it('keeps only the first of the words stamped at one instant at the end of a chunk', () => {
+    const words = [at(1, 'four,'), at(1.4, 'five,'), at(1.8, 'six,'), at(1.8, 'seven,'), at(1.81, 'eight,'), at(1.8, 'nine.')]
+    expect(dropTailPileup(words).map((w) => w.text)).toEqual(['four,', 'five,', 'six,'])
+  })
+
+  it('leaves short bursts, mid-chunk pile-ups and ordinary chunks alone', () => {
+    const two = [at(1, 'a'), at(2, 'b'), at(2, 'c')]
+    expect(dropTailPileup(two)).toBe(two)
+    const middle = [at(1, 'a'), at(1, 'b'), at(1, 'c'), at(2, 'd')]
+    expect(dropTailPileup(middle)).toBe(middle)
+    expect(dropTailPileup([])).toEqual([])
+  })
+})
+
+describe('chunk seams with DTW word times', () => {
+  // One word per segment (-ml 1), DTW times in 10 ms units (-ojf -dtw).
+  const seg = (from: number, to: number, text: string, dtw: number) => ({
+    offsets: { from, to },
+    text,
+    tokens: [
+      { text: '[_BEG_]', t_dtw: -1 },
+      { text, t_dtw: dtw }
+    ]
+  })
+  const A = { start: 0, end: 600 }
+  const B = { start: 600, end: 1200 }
+  const chunk = (range: { start: number; end: number }, json: unknown, vad: { start: number; end: number; vadStart: number }[]) => {
+    const parsed = parseWhisperJson(json, { vad })
+    const placed = placeChunkWords(parsed.words, range)
+    return { range, words: placed.words, dropped: placed.dropped, dtw: parsed.dtw }
+  }
+  const texts = (ws: { text: string }[]) => ws.map((w) => w.text)
+
+  it('puts words either side of a seam once each, in order, with none dropped', () => {
+    // Chunk A: speech at 595.9-598.4 (stretch ends 598.5), silence after. Chunk B: speech from 1.2 s in.
+    const a = chunk(A, { transcription: [seg(59500, 59700, ' last', 40), seg(59700, 59900, ' words', 90), seg(59900, 60000, ' here.', 250)] }, [{ start: 595.9, end: 598.5, vadStart: 0 }])
+    const b = chunk(B, { transcription: [seg(100, 300, ' First', 20), seg(300, 500, ' words', 60)] }, [{ start: 1.2, end: 2, vadStart: 0 }])
+    expect([a.dtw, b.dtw, a.dropped, b.dropped]).toEqual([true, true, 0, 0])
+    const merged = mergeChunks([a, b])
+    expect(texts(merged)).toEqual(['last', 'words', 'here.', 'First', 'words'])
+    for (let i = 1; i < merged.length; i++) {
+      expect(merged[i]!.t0).toBeGreaterThanOrEqual(merged[i - 1]!.t0)
+      expect(merged[i]!.t0).toBeGreaterThanOrEqual(merged[i - 1]!.t1 - 1e-9)
+    }
+    // "First": DTW 0.2 s in B's speech-only audio is 1.2 s in the chunk, on the VOD timeline 601.2 s.
+    expect(merged[3]!.t0).toBeCloseTo(601.2)
+    expect(merged[2]!.t1).toBeLessThanOrEqual(598.5)
+  })
+
+  it('keeps a word that sits right on the seam exactly once, whichever chunk heard it', () => {
+    // The same word heard at the seam by both chunks, a little differently timed.
+    const a = { range: A, words: [{ t0: 599.7, t1: 599.95, text: 'well' }] }
+    const b = { range: B, words: [{ t0: 599.9, t1: 600.2, text: 'well' }, { t0: 600.4, t1: 600.7, text: 'then' }] }
+    expect(texts(mergeChunks([a, b]))).toEqual(['well', 'then'])
+  })
+
+  it('drops the words a chunk invents past the end of audio cut mid-word', () => {
+    // Chunk A ends after "six"; whisper counts on to nine, all stamped at the end of the audio.
+    const a = chunk(
+      A,
+      { transcription: [seg(59000, 59300, ' five,', 500), seg(59300, 59900, ' six,', 990), seg(59900, 59900, ' seven,', 990), seg(59900, 59900, ' eight,', 990), seg(59900, 59900, ' nine.', 990)] },
+      [{ start: 590, end: 600, vadStart: 0 }]
+    )
+    const b = chunk(B, { transcription: [seg(100, 400, ' seven,', 30), seg(400, 800, ' eight.', 60)] }, [{ start: 0, end: 1, vadStart: 0 }])
+    expect(texts(mergeChunks([a, b]))).toEqual(['five,', 'six,', 'seven,', 'eight.'])
   })
 })

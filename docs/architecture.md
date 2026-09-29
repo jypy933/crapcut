@@ -131,16 +131,28 @@ median 215 ms early, worst tenth over 600 ms). Both whisper passes therefore
 also ask for DTW token times (`-ojf -dtw <preset> -nfa`; flash attention
 silently disables DTW). With `--vad`, whisper hears only the speech stretches
 back to back and does not map token or DTW times back to the file, so
-`whisperChunk` reads the `vad_segment_info` log lines (hence no `-np`) and
-`core/transcript.ts` maps each word's DTW time back itself, subtracts the
+`whisperChunk` reads the `vad_segment_info` log lines (hence no `-np`; the
+extra log is about 150 KB per 10-minute chunk and costs no measurable time)
+and `core/transcript.ts` maps each word's DTW time back itself, subtracts the
 measured ~200 ms DTW lag, keeps the start inside its VAD stretch and ends the
 word at the next word, a plausible length for its text, or the end of the
-stretch. Measured against speech with exactly known word times: median about
-60 ms, no word more than about 100 ms early
-(`pipeline/wordTiming.render.test.ts` checks this on Windows). If any word
-lacks a DTW time, or the VAD lines cannot be read, the chunk keeps whisper's
-own timestamps; if a run with DTW fails and one without it works, DTW is off
-for the rest of that job.
+stretch less the ~100 ms of silence VAD waits for before closing it. Measured
+against speech with exactly known word times (two Windows voices): start
+median about 50 ms, 90% within 100 ms, none more than about 110 ms early; end
+median about 30 ms, 90% within 90 ms; a word is on screen over a pause for
+0.2 s in total, against 13.9 s with whisper's own timestamps
+(`pipeline/wordTiming.render.test.ts` reports and checks this on Windows). DTW
+costs about 15-30% more transcription time (flash attention has to be off).
+
+A chunk cut in the middle of a word makes whisper carry on past the end of the
+audio, stamping the invented words at one instant; `dropTailPileup` keeps only
+the first, and `mergeChunks` keeps a word both sides of a seam heard once.
+
+DTW never costs a transcript (`core/dtwGate.ts`): if a run with DTW fails and
+one without it works, the chunk is redone without it; if any word lacks a DTW
+time, or the VAD lines cannot be read, the chunk keeps whisper's own
+timestamps. Each such chunk is logged (locally only), and after two the job
+stops asking for DTW.
 
 ### Captions and layout
 

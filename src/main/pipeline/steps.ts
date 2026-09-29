@@ -43,6 +43,7 @@ import { pickStructureWithLlm, STRUCTURE_SYSTEM_PROMPT } from '../core/structure
 import { computeSignals } from '../core/structureSignals'
 import { deriveTasteAdjustments, type TasteAdjustments } from '../core/taste'
 import { assessSpeech, findBadTranscriptRanges, judgeSpeech } from '../core/transcriptQuality'
+import { DtwGate } from '../core/dtwGate'
 import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
 import type { AppPaths } from '../paths'
 import type { Store } from '../store'
@@ -186,6 +187,19 @@ async function chunkDone(file: string): Promise<boolean> {
 /** GPU failures after which the rest of the VOD is transcribed on the CPU. */
 const MAX_GPU_FAILURES = 2
 
+/**
+ * Logs (locally, never in the UI) when a run had no usable DTW word times,
+ * and switches DTW off for the job once that keeps happening: a chunk with
+ * words but no DTW times means the build ignored `-dtw` or its log could not
+ * be read, and flash attention is off for nothing.
+ */
+function noteDtw(log: Logger, gate: DtwGate, name: string, result: WhisperChunkResult, parsed: { dtw: boolean; words: unknown[] }): void {
+  const bad = result.dtwFailed || (result.dtw && !parsed.dtw && parsed.words.length > 0)
+  if (!bad) return
+  const off = gate.failed()
+  log.warn(`${name}: ${result.dtwFailed ? 'the run with DTW failed' : 'no usable DTW word times'}; using whisper's own timestamps${off ? ', and not asking for DTW again in this job' : ''}`)
+}
+
 async function transcribe(ctx: StepContext): Promise<void> {
   if (transcriptDone(ctx.dir)) return
   const meta = await loadMeta(ctx.dir)
@@ -204,8 +218,8 @@ async function transcribe(ctx: StepContext): Promise<void> {
   if (!large && !small) throw new UserError('The speech model is missing. Open setup to download it again.', { retryable: false })
   // The large model on the GPU; the small one on the CPU (the large one is far too slow there).
   const modelFor = (gpu: boolean): string => (gpu ? (large ?? small)! : (small ?? large)!)
-  // Off for the rest of the job once a run with DTW failed and one without it worked.
-  let useDtw = true
+  // Stops asking for DTW word times once they keep failing or coming back empty.
+  const dtwGate = new DtwGate()
   const vad = ctx.tools.path('model-vad')
   const root = ctx.paths.root
   const rel = (p: string): string => relative(root, p)
@@ -260,11 +274,10 @@ async function transcribe(ctx: StepContext): Promise<void> {
           threads: gpu ? 4 : cpuThreads,
           gpu,
           beam: gpu ? 5 : 1,
-          dtw: useDtw ? dtwPreset(model === large ? 'large' : 'small') : null,
+          dtw: dtwGate.enabled ? dtwPreset(model === large ? 'large' : 'small') : null,
           signal: ctx.signal,
           onProgress: report
         })
-        if (useDtw && !result.dtw) useDtw = false
         return result
       }
       let result: WhisperChunkResult
@@ -280,7 +293,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
         result = await run(false)
       }
       const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`), result)
-      if (!parsed.dtw && parsed.words.length > 0) ctx.log.warn(`${name}: no DTW word times; using whisper's own`)
+      noteDtw(ctx.log, dtwGate, name, result, parsed)
       if (!language && parsed.language) {
         language = parsed.language
         writeFileSync(langFile, language)
@@ -799,7 +812,7 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
   let failures = 0
   let useGpu = !!gpuWhisper
   let gpuFailures = 0
-  let useDtw = true
+  const dtwGate = new DtwGate()
   const release = await ctx.gpu.acquire(ctx.signal)
   try {
     for (let i = 0; i < clips.length; i++) {
@@ -826,11 +839,10 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
             threads: gpu ? 4 : cpuThreads,
             gpu,
             beam: gpu ? 5 : 1,
-            dtw: useDtw ? dtwPreset('large') : null,
+            dtw: dtwGate.enabled ? dtwPreset('large') : null,
             signal: ctx.signal,
             onProgress: report
           })
-          if (useDtw && !result.dtw) useDtw = false
           return result
         }
         let result: WhisperChunkResult
@@ -844,6 +856,7 @@ async function clipCaptions(ctx: StepContext): Promise<void> {
           result = await run(false)
         }
         const parsed = parseWhisperJson(await readJson<unknown>(`${outBase}.json`), result)
+        noteDtw(ctx.log, dtwGate, clip.id, result, parsed)
         let words = parsed.words
         if (words.some((w) => isStretchedWord(w))) {
           try {
