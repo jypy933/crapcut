@@ -31,7 +31,7 @@ export interface Rect {
   h: number
 }
 
-export const STEP_IDS = ['metadata', 'chat', 'audio', 'transcribe', 'moments', 'clips'] as const
+export const STEP_IDS = ['metadata', 'chat', 'audio', 'transcribe', 'moments', 'clipCaptions', 'clips'] as const
 export type StepId = (typeof STEP_IDS)[number]
 
 export const STEP_LABELS: Record<StepId, string> = {
@@ -40,6 +40,7 @@ export const STEP_LABELS: Record<StepId, string> = {
   audio: 'Downloading audio',
   transcribe: 'Transcribing',
   moments: 'Finding the best moments',
+  clipCaptions: 'Sharpening captions',
   clips: 'Downloading clip video'
 }
 
@@ -143,6 +144,13 @@ export interface Clip {
   status: ClipStatus
   /** Caption words for this clip (VOD seconds), editable. */
   words: Word[]
+  /**
+   * Set once he edits this clip's caption text in Review. Missing (old rows)
+   * or false means the words are still whatever the pipeline last produced,
+   * so the CPU-only clip-captions step is free to replace them with a
+   * cleaner re-transcription.
+   */
+  wordsEdited?: boolean
   captions: CaptionSettings
   /** Chat messages in this clip's time range (VOD seconds), padded like `words`. */
   chatMessages: ChatMessage[]

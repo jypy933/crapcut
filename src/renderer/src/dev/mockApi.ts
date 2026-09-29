@@ -17,7 +17,15 @@ const step = (status: StepState['status'], progress = status === 'done' ? 1 : 0,
   etaSec,
   detail
 })
-const allDone = (): Record<StepId, StepState> => ({ metadata: step('done'), chat: step('done'), audio: step('done'), transcribe: step('done'), moments: step('done'), clips: step('done') })
+const allDone = (): Record<StepId, StepState> => ({
+  metadata: step('done'),
+  chat: step('done'),
+  audio: step('done'),
+  transcribe: step('done'),
+  moments: step('done'),
+  clipCaptions: step('done'),
+  clips: step('done')
+})
 
 const params = new URLSearchParams(location.search)
 let setupReady = params.get('setup') !== '1'
