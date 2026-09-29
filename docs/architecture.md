@@ -15,9 +15,9 @@ main process
    ├─ pipeline/
    │   ├─ runner.ts     one job at a time, step checkpoints, retries, pause/continue
    │   ├─ steps.ts      metadata -> chat -> audio -> transcribe -> moments -> clips
-   │   ├─ clipRender.ts renders one clip to a file; shared by exporter.ts and bestOf.ts
+   │   ├─ clipRender.ts renders one clip, or prepares it for the best-of; shared by exporter.ts and bestOf.ts
    │   ├─ exporter.ts   export lane: renders kept clips one at a time
-   │   ├─ bestOf.ts     joins the kept clips into one 16:9 "best of" video
+   │   ├─ bestOf.ts     joins the kept clips into one 16:9 "best of" video, one encode
    │   └─ gpuLock.ts    one AI model on the GPU at a time
    ├─ tools/          pinned downloads, checksums, GPU detection, process runner
    └─ core/           pure logic, unit-tested without Electron
@@ -194,15 +194,28 @@ it once.
 ### Best of the stream
 
 From Review, "Best of" joins the job's kept clips, in stream order, into one
-16:9 video for a single YouTube upload. Each kept clip is rendered fresh as
-its own 16:9 export (same captions, audio option and encoder choice as a
-normal export), then `core/bestOf.ts` builds one FFmpeg command that
-normalises every clip to 1920x1080/30fps/48kHz and joins them with a 0.5 s
-`xfade`/`acrossfade` crossfade; a single kept clip is just re-encoded with no
-crossfade. A crossfade is shortened for a short clip so it never eats more
-than 40% of either neighbour. `pipeline/bestOf.ts` runs this like a small
-export queue (progress, ETA, cancel, resume after a restart) and reuses the
-exporter's encoder choice.
+16:9 video for a single YouTube upload, with one video encode: no clip is
+compressed twice. Each kept clip is first prepared exactly like a normal 16:9
+export, minus the encode (`prepareClipForBestOf` in `pipeline/clipRender.ts`:
+captions and chat overlay, voice separation from the per-clip stem cache,
+loudness), and its sound goes through the same audio chain as an export into a
+lossless WAV. Then `core/bestOf.ts` builds one FFmpeg command whose filter
+graph has a labelled branch per clip (its cut of the source, the same layout
+and captions as an export, its WAV), each cut to a whole number of frames at
+1920x1080/30fps/48kHz and joined with a 0.5 s `xfade`/`acrossfade` crossfade,
+and encodes it once with the exporter's encoder. The per-clip pieces come from
+`videoChain`/`audioChain` in `core/render.ts`, the same code a normal export
+runs, so the two cannot drift apart. A single kept clip is just encoded with
+no crossfade. A crossfade is shortened for a short clip so it never eats more
+than 40% of either neighbour.
+
+The graph is written to a file (`-/filter_complex`), so many clips never hit
+the Windows command-line limit. Every clip keeps a decoder open during the
+encode, at roughly 60-90 MB each, so one best-of holds up to 50 clips (about
+4 GB at 50 clips of 1080p60). `pipeline/bestOf.ts` runs this like a small
+export queue (progress and ETA over the prep and the encode, cancel, resume
+after a restart from the prep cache, hardware-encoder fallback to libx264) and
+shares the exporter's encode lock.
 
 ## Hardware
 
