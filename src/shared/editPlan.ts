@@ -64,6 +64,9 @@ export interface LoopPlan {
   calibrated: false
 }
 
+/** How soon the first word or reaction lands in the edit: within 0.5 s, within 1 s, later, or not found. */
+export type HookGrade = 'soft' | 'hard' | 'late' | 'unknown'
+
 export interface ClipEditPlan {
   /** Length of the straight (non-cold-open) edit. */
   finalSec: number
@@ -75,5 +78,8 @@ export interface ClipEditPlan {
   belowFloor: boolean
   capFit: PlatformCapFit
   coldOpen: ColdOpenPlan
-  loop: LoopPlan
+  loop: LoopPlan  /** The hook check's outcome, read by the virality score; missing on a plan saved before the score existed. */
+  hook?: { grade: HookGrade; pass: boolean }
+  /** The content floor's outcome and how much of the edit is speech or loud sound, 0..1; same note. */
+  content?: { pass: boolean; coverage: number }
 }

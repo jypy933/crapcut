@@ -71,6 +71,13 @@ describe('planAutoEdit: a healthy clip', () => {
     expect(r.checks.find((c) => c.check === 'hook')!.status).toBe('pass')
   })
 
+  it('keeps the hook and content outcome on the plan for the virality score', () => {
+    const r = planAutoEdit(healthy().input)
+    expect(r.plan.hook).toEqual({ grade: expect.stringMatching(/^(soft|hard)$/), pass: true })
+    expect(r.plan.content?.pass).toBe(true)
+    expect(r.plan.content?.coverage).toBeGreaterThanOrEqual(0.4)
+  })
+
   it('works with no language model and no loudness envelope at all (degraded)', () => {
     const { facts } = healthy()
     const r = planAutoEdit({ facts, decision: decisionFor(facts), bounds: { start: 80, end: 150 } })

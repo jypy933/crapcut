@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Clapperboard, Crop, FolderOpen, Music, Pause, Play, RotateCcw, Smartphone, Monitor, Wand2, X } from 'lucide-react'
+import { ArrowLeft, Check, Clapperboard, Crop, FolderOpen, Music, Pause, Play, RotateCcw, Smartphone, Monitor, Sparkles, Wand2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { editGroupText } from '@shared/captionEdit'
 import { clipWords, groupWords, type CaptionGroup } from '@shared/captions'
@@ -17,6 +17,9 @@ import { Field, ProgressBar, Segmented, Spinner, Toggle } from '../components/ui
 import { FALLBACK_LAYOUT } from '../lib/compose'
 
 const OFF_PREVIEW: AutoEditPreviewState = { clipId: '', status: 'off', version: null }
+
+/** Marked as one of the job's clearly best moments (it started out accepted); not shown once he skips it. */
+const isTopPick = (c: Clip): boolean => c.virality?.topPick === true && c.status !== 'rejected'
 
 export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void }): ReactNode {
   const [clips, setClips] = useState<Clip[] | null>(null)
@@ -201,15 +204,14 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
                 <div className="title ellipsis">{c.title}</div>
                 <div className="small faint">
                   {formatLength(c.end - c.start)} · {formatClock(c.start)}
+                  {isTopPick(c) && (
+                    <span className="top-pick" title="One of the best moments in this stream">
+                      <Sparkles size={11} /> Top pick
+                    </span>
+                  )}
                 </div>
               </div>
-              {c.status === 'accepted' ? (
-                <Check size={15} color="var(--good)" />
-              ) : c.status === 'rejected' ? (
-                <X size={15} color="var(--text-3)" />
-              ) : (
-                <span className="chip">{Math.round(c.score * 100)}</span>
-              )}
+              {c.status === 'accepted' ? <Check size={15} color="var(--good)" /> : c.status === 'rejected' ? <X size={15} color="var(--text-3)" /> : null}
             </div>
           ))}
         </div>
@@ -529,7 +531,7 @@ function Inspector({
       <div className="col small faint">
         <span>{clip.reason}</span>
         <span>
-          At {formatClock(clip.start)} in the stream · score {Math.round(clip.score * 100)}
+          At {formatClock(clip.start)} in the stream{isTopPick(clip) ? ' · Top pick' : ''}
         </span>
         {edited && (
           <button type="button" className="btn sm ghost" style={{ alignSelf: 'flex-start' }} onClick={onReset}>

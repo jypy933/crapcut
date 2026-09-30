@@ -35,6 +35,7 @@ const baseClip = (over: Partial<Clip> = {}): Clip => ({
   signals: null,
   structureDecision: { structure: 'tightCut', loopEnding: false, emphasisWords: [], reasons: ['plain cut, nothing else stood out'] },
   autoEdit: true,
+  virality: { score: 0.5, topPick: false },
   ...over
 })
 
@@ -186,6 +187,27 @@ describe('ensureClipNormalized / ensureClipsNormalized (I/O)', () => {
     expect(result.find((c) => c.id === 'c3')!.chatOverlay).toBe(true)
 
     for (const c of result) expect(needsNormalizing(c)).toBe(false)
+  })
+
+  it('scores a job saved before the virality score, best first and renumbered, without touching statuses', async () => {
+    const jobId = store.createJob('u', 'v6')
+    const noScore = (over: Partial<Clip>): Clip => {
+      const c = baseClip(over) as unknown as Record<string, unknown>
+      delete c.virality
+      return c as unknown as Clip
+    }
+    const weak = noScore({ id: 'weak', jobId, rank: 1, status: 'rejected', signals: { chatZ: 2.6, audioZ: 0, score: 0.3, rating: null, source: 'chat' } })
+    const strong = noScore({ id: 'strong', jobId, rank: 2, status: 'pending', signals: { chatZ: 9, audioZ: 6, score: 0.9, rating: null, source: 'chat' } })
+    store.replaceClips(jobId, [weak, strong])
+
+    const result = await ensureClipsNormalized(store, paths, [weak, strong])
+    expect(result.map((c) => c.id)).toEqual(['strong', 'weak'])
+    expect(result.map((c) => c.rank)).toEqual([1, 2])
+    expect(result.map((c) => c.status)).toEqual(['pending', 'rejected'])
+    expect(result.every((c) => c.virality && !c.virality.topPick)).toBe(true)
+    // Saved: the next read is already ordered and needs nothing.
+    expect(store.clips(jobId).map((c) => c.id)).toEqual(['strong', 'weak'])
+    expect(store.clips(jobId).every((c) => !needsNormalizing(c))).toBe(true)
   })
 
   it('returns the same clips untouched when none need normalizing', async () => {

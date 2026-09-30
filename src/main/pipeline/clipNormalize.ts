@@ -19,13 +19,14 @@ import { chatIn } from '@shared/chatOverlay'
 import type { ChatMessage, Clip } from '@shared/types'
 import { parseChatLog } from '../core/chat'
 import { decideStructureHeuristically } from '../core/clipFacts'
+import { orderBestFirst, withLegacyScore } from '../core/virality'
 import { jobDir, type AppPaths } from '../paths'
 import type { Store } from '../store'
 import { CLIP_PAD_SEC } from './steps'
 
 /** True once a clip is missing a field added after it was first saved. */
 export function needsNormalizing(clip: Clip): boolean {
-  return !Array.isArray(clip.chatMessages) || typeof clip.chatOverlay !== 'boolean' || typeof clip.autoEdit !== 'boolean' || !clip.structureDecision
+  return !Array.isArray(clip.chatMessages) || typeof clip.chatOverlay !== 'boolean' || typeof clip.autoEdit !== 'boolean' || !clip.structureDecision || !clip.virality
 }
 
 /**
@@ -43,11 +44,13 @@ export function normalizeClip(clip: Clip, chatMessages: ChatMessage[]): Clip {
     chatMessages: Array.isArray(clip.chatMessages) ? clip.chatMessages : chatMessages,
     chatOverlay: typeof clip.chatOverlay === 'boolean' ? clip.chatOverlay : false
   }
-  return {
+  const filled: Clip = {
     ...withChat,
     autoEdit: typeof withChat.autoEdit === 'boolean' ? withChat.autoEdit : true,
     structureDecision: withChat.structureDecision ?? decideStructureHeuristically(withChat)
   }
+  // Scored last, from the clip as filled in; never pre-selected, his status stays.
+  return filled.virality ? filled : withLegacyScore(filled)
 }
 
 /** The job's whole chat log, windowed later per clip. `[]` when chat.txt is missing. */
@@ -69,14 +72,21 @@ export async function ensureClipNormalized(store: Store, paths: AppPaths, clip: 
   return normalized
 }
 
-/** Same, for a whole job's clips; reads chat.txt at most once even if several need it. */
+/**
+ * Same, for a whole job's clips; reads chat.txt at most once even if several need it.
+ * A job saved before the virality score existed comes back best first (and
+ * renumbered, so the list, the file names and the numbers agree).
+ */
 export async function ensureClipsNormalized(store: Store, paths: AppPaths, clips: Clip[]): Promise<Clip[]> {
   if (clips.length === 0 || !clips.some(needsNormalizing)) return clips
+  const legacyJob = clips.every((c) => !c.virality)
   const messages = await loadChatMessages(paths, clips[0]!.jobId)
-  return clips.map((clip) => {
-    if (!needsNormalizing(clip)) return clip
-    const normalized = normalizeClip(clip, chatIn(messages, clip.start - CLIP_PAD_SEC, clip.end + CLIP_PAD_SEC))
-    store.saveClip(normalized)
-    return normalized
-  })
+  const normalized = clips.map((clip) => (needsNormalizing(clip) ? normalizeClip(clip, chatIn(messages, clip.start - CLIP_PAD_SEC, clip.end + CLIP_PAD_SEC)) : clip))
+  const out = legacyJob ? orderBestFirst(normalized) : normalized
+  const before = new Map(clips.map((c) => [c.id, c]))
+  for (const clip of out) {
+    const old = before.get(clip.id)
+    if (clip !== old || clip.rank !== old?.rank) store.saveClip(clip)
+  }
+  return out
 }

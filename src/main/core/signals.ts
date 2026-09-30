@@ -23,6 +23,11 @@ export function reactionWeight(text: string): number {
   return Math.min(w, 3)
 }
 
+/** A laugh, hype or shock token (LUL, KEKW, Pog, W, WTF, ?...): what the virality score counts as a reaction. */
+export function isReactionToken(text: string): boolean {
+  return LAUGH.test(text) || HYPE.test(text) || SHOCK.test(text)
+}
+
 /** Seconds a rolling window looks around each second to count distinct chatters. */
 const CHATTER_WINDOW_SEC = 20
 

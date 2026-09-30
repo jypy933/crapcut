@@ -10,7 +10,7 @@
 // (keep the whole cut), then grow the cut from its download padding, then give
 // up on the clip (`drop`) only if it is still short.
 
-import type { ClipEditPlan, ColdOpenLlmVerdict } from '@shared/editPlan'
+import type { ClipEditPlan, ColdOpenLlmVerdict, HookGrade } from '@shared/editPlan'
 import type { Range } from '@shared/types'
 import { coldOpenVariantEdl, buildViralEdit, clipRelativeWords, type PacingStats, type ViralEditOptions } from './viralEdit'
 import { planColdOpen } from './coldOpen'
@@ -180,7 +180,9 @@ export function planAutoEdit(input: PlanInput): PlanResult {
       loudnessDiffLu: seam?.loudnessDiffLu ?? null,
       quietSec: loopPlan.candidate?.quietSec ?? null,
       calibrated: false
-    }
+    },
+    hook: { grade: hook.values.grade as HookGrade, pass: hook.status === 'pass' },
+    content: { pass: content.status !== 'fail', coverage }
   }
 
   const checks: CheckResult[] = [

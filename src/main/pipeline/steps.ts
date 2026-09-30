@@ -43,6 +43,7 @@ import { pickStructure } from '../core/structurePick'
 import { pickStructureWithLlm, STRUCTURE_SYSTEM_PROMPT } from '../core/structureLlm'
 import { computeSignals } from '../core/structureSignals'
 import { deriveTasteAdjustments, type TasteAdjustments } from '../core/taste'
+import { rankClips } from '../core/virality'
 import { assessSpeech, dropIsolatedFiller, findBadTranscriptRanges, judgeSpeech } from '../core/transcriptQuality'
 import { DtwGate } from '../core/dtwGate'
 import { CHUNK_FORMAT, mergeChunks, packWords, parseWhisperJson, placeChunkWords, planChunks, repairChunkWordTimings, unpackWords, wordsIn, type PackedWord } from '../core/transcript'
@@ -536,13 +537,18 @@ async function moments(ctx: StepContext): Promise<void> {
     })
     if (planned.dropped > 0) ctx.log.info(`dropped ${planned.dropped} clips under the length or content floor`)
 
+    // Best moments first, and the clearly strong ones start out accepted;
+    // the score and what went into it go to the log, never to the UI.
+    const ranked = rankClips(planned.clips, adjustments)
+    for (const line of ranked.lines) ctx.log.info(line)
+
     await writeJsonAtomic(join(ctx.dir, 'moments.json'), {
       candidates,
       refined,
       scanned: scanned.map((p) => ({ window: p.window, title: p.title, score: p.score })),
-      chosen: planned.clips.map((c) => c.id)
+      chosen: ranked.clips.map((c) => c.id)
     })
-    ctx.store.replaceClips(ctx.job.id, planned.clips)
+    ctx.store.replaceClips(ctx.job.id, ranked.clips)
   } finally {
     llm?.close()
   }

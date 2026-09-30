@@ -205,7 +205,7 @@ let clips: Clip[] = titles.map((title, i) => {
     end: start + 28 + i * 3,
     suggested: { start, end: start + 28 + i * 3 },
     source: { start: start - 20, end: start + 48 + i * 3 },
-    status: i === 0 ? 'accepted' : i === 3 ? 'rejected' : 'pending',
+    status: i < 2 ? 'accepted' : i === 3 ? 'rejected' : 'pending',
     words: words(start + 1, 'okay okay watch this one guys no way he actually did that. I cannot believe what just happened! chat is going crazy right now this is insane.'),
     captions: { enabled: true, y: 0.72, uppercase: true, styleId: 'clean' },
     chatMessages: fakeChat(start - 20, start + 48 + i * 3),
@@ -217,7 +217,9 @@ let clips: Clip[] = titles.map((title, i) => {
     reason: i % 2 ? 'Chat spike · laughter' : 'Chat spike · hype · loud',
     signals: { chatZ: 3.2, audioZ: 1.1, score: 0.7, rating: 7, source: i % 2 ? 'chat' : 'audio' },
     structureDecision: null,
-    autoEdit: true
+    autoEdit: true,
+    // The first two are the job's clearly strong moments: pre-selected, best first.
+    virality: { score: Math.round((0.86 - i * 0.09) * 1000) / 1000, topPick: i < 2 }
   }
 })
 // Dev-only regression fixture for the Timeline trim bar: word marks whose

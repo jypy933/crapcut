@@ -106,6 +106,14 @@ export interface MomentSignals {
   source: MomentSource
 }
 
+/** How the virality score ranked a clip within its job; see `main/core/virality.ts`. */
+export interface ClipVirality {
+  /** 0..1, best moments first. Only ever used to order clips and pre-select, never shown as a number. */
+  score: number
+  /** Clearly strong for this job, so it started out accepted. */
+  topPick: boolean
+}
+
 export const AUDIO_MODES = ['original', 'voice', 'voice_game', 'voice_music'] as const
 export type AudioMode = (typeof AUDIO_MODES)[number]
 
@@ -189,6 +197,8 @@ export interface Clip {
    * saved before it existed.
    */
   editPlan?: ClipEditPlan
+  /** Set when moments are found (and filled in on load for a clip saved before it existed). */
+  virality?: ClipVirality
 }
 
 export type LayoutKind = 'cam_game' | 'blur_fill' | 'center_crop'
