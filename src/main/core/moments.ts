@@ -72,7 +72,12 @@ const CHATTER_Z_FLOOR = 3
 /** A confirmed chat reaction's z-score is added on top of this base, see below. */
 const CHAT_BASE = 1.5
 /** Loudness peaks below this are not candidates at all. */
-const LOUD_MIN_Z = 3
+export const LOUD_MIN_Z = 3
+
+/** True when a clip's stored `audioZ` is a loudness peak by the same bar moment finding uses. */
+export function isLoudPeak(audioZ: number | null | undefined): boolean {
+  return (audioZ ?? 0) >= LOUD_MIN_Z
+}
 /** Strength of a loud-only moment right at the detection threshold. */
 const LOUD_BASE = 1.2
 /** How fast a loud-only moment's strength grows past the threshold (log-compressed, see below). */

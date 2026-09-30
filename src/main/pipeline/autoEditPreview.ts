@@ -14,15 +14,14 @@ import type { AutoEditPreviewState, ExportFormat, Layout } from '@shared/types'
 import { captionY } from '@shared/captionPlacement'
 import { captionStyle } from '@shared/captionStyles'
 import { buildAss, defaultAssStyle } from '../core/ass'
-import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
 import { buildEdlRenderArgs, buildOverlayAss, edlToFilterGraph, type EdlRenderSpec } from '../core/edlFilter'
 import { remapWordsToEdl } from '../core/edlCaptions'
 import { wordsIn } from '../core/transcript'
-import { buildViralEdl } from '../core/viralEdit'
 import { jobDir, type AppPaths } from '../paths'
 import type { Store } from '../store'
 import { runTool } from '../tools/process'
 import type { ToolRegistry } from '../tools/registry'
+import { resolveAutoEdit } from './autoEditPlan'
 import { ensureSfxCache } from './sfxCache'
 import { probeMedia } from './media'
 import { logger } from '../util/log'
@@ -91,18 +90,26 @@ export class AutoEditPreviewService {
     }
 
     try {
-      const decision = clip.structureDecision ?? decideStructureHeuristically(clip)
-      const start = Math.max(clip.start, clip.source.start)
-      const end = Math.min(clip.end, clip.source.end)
-      const facts = { ...clipFacts(clip), window: { start, end } }
-
       const ffmpeg = this.tools.require('ffmpeg')
       const sfx = await ensureSfxCache(ffmpeg, join(this.paths.tools, 'sfx'))
-      const edl = buildViralEdl(decision, facts, { sfx })
+      const input = join(jobDir(this.paths, clip.jobId), 'clips', `${clip.id}.mp4`)
+      const layout = clip.layoutId ? this.store.layout(clip.layoutId) : null
+      // The rule engine's plan: the straight edit, with the cut grown from its
+      // padding when the edit would otherwise end up under the length floor.
+      const planned = await resolveAutoEdit(this.store, {
+        ffmpeg,
+        input,
+        clip,
+        window: { start: Math.max(clip.start, clip.source.start), end: Math.min(clip.end, clip.source.end) },
+        cam: layout?.kind === 'cam_game' ? layout.cam : null,
+        sfx,
+        signal
+      })
+      const { start, end } = planned.window
+      const edl = planned.edl
 
       const dir = previewDir(this.paths, clip.jobId)
       mkdirSync(dir, { recursive: true })
-      const layout = clip.layoutId ? this.store.layout(clip.layoutId) : null
       const key = cacheKey(edl, clip, layout, format)
       const file = join(dir, `${clipId}-${key}.mp4`)
       if (existsSync(file)) {
@@ -116,7 +123,6 @@ export class AutoEditPreviewService {
       const font = join(dir, 'fonts', 'Montserrat-Black.ttf')
       if (!existsSync(font)) copyFileSync(join(this.paths.resources, 'fonts', 'Montserrat-Black.ttf'), font)
 
-      const input = join(jobDir(this.paths, clip.jobId), 'clips', `${clip.id}.mp4`)
       const ffprobe = ffmpeg.replace(/ffmpeg\.exe$/i, 'ffprobe.exe')
       const media = await probeMedia(ffprobe, input, signal)
       const seek = start - clip.source.start

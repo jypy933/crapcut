@@ -3,7 +3,9 @@ import type { ChatMessage, Word } from '@shared/types'
 import { outputDuration, validateEdl } from './edl'
 import { pickStructure } from './structurePick'
 import { computeSignals, type ClipFacts } from './structureSignals'
-import { buildViralEdl, type ViralEditOptions } from './viralEdit'
+import type { ColdOpenPlan } from '@shared/editPlan'
+import { capFit, type Envelope } from './editRules'
+import { buildViralEdit, buildViralEdl, coldOpenVariantEdl, type ViralEditOptions } from './viralEdit'
 
 /** A word every `gap` seconds, `n` of them, starting at `start` (VOD seconds). */
 function speech(start: number, n: number, gap = 0.4, wordLen = 0.3, textAt: Record<number, string> = {}): Word[] {
@@ -54,26 +56,17 @@ function expectSaneEdl(f: ClipFacts, options: ViralEditOptions = {}): ReturnType
 }
 
 describe('buildViralEdl: payoffFirst', () => {
-  it('opens with a cold-open replay of the peak before the full build-up', () => {
+  it('is a tight cut: the clip already opens on its payoff, so nothing is replayed', () => {
     const f = facts({ window: { start: 100, end: 130 }, words: speech(100, 20, 0.4), loudness: loudness(200, 102, 3, -5) })
     const signals = computeSignals(f)
     const decision = pickStructure(signals, f.words, f.window.start)
     expect(decision.structure).toBe('payoffFirst')
     const edl = expectSaneEdl(f, FAKE_SFX)
-    expect(edl.segments.length).toBe(2)
-    expect(edl.segments[0]!.srcEnd).toBeGreaterThan(edl.segments[0]!.srcStart)
-    // The cold-open reorder cut gets a whoosh, the peak zoom gets a boom.
-    expect(edl.sfx.some((s) => s.file === 'whoosh.wav')).toBe(true)
+    // One continuous segment: the old cold-open replay showed the payoff's words twice within 3 s.
+    expect(edl.segments.length).toBe(1)
+    expect(edl.sfx.some((s) => s.file === 'whoosh.wav')).toBe(false)
     expect(edl.sfx.some((s) => s.file === 'boom.wav')).toBe(true)
     expect(edl.zoom.length).toBeGreaterThan(0)
-  })
-
-  it('falls back to a plain cut when there is no usable cold-open span (degraded)', () => {
-    const f = facts({ window: { start: 0, end: 0.05 } }) // too short for computeSignals to find a hook span
-    const decision = pickStructure(computeSignals(f), f.words, f.window.start)
-    const edl = buildViralEdl({ ...decision, structure: 'payoffFirst', coldOpenSpan: undefined }, f, FAKE_SFX)
-    expect(validateEdl(edl, f.window.end - f.window.start)).toEqual([])
-    expect(edl.segments.length).toBe(1)
   })
 })
 
@@ -93,7 +86,9 @@ describe('buildViralEdl: quoteCard', () => {
     expect(edl.overlays[0]!.kind).toBe('quoteBar')
     expect(edl.overlays[0]!.text).toBe('no way he hit.')
     expect(edl.sfx.some((s) => s.file === 'pop.wav')).toBe(true)
-    if (decision.loopEnding) expect(edl.ending.kind).toBe('loop')
+    // A loop is a property of the version the rule engine approved, not of the structure alone.
+    expect(edl.ending.kind).toBe('cut')
+    expect(buildViralEdl(decision, f, { ...FAKE_SFX, loop: { endSec: 29, crossfadeSec: 0.06 } }).ending).toEqual({ kind: 'loop', crossfadeSec: 0.06 })
   })
 
   it('produces a plain edit with no overlay when there is no quotable span (degraded)', () => {
@@ -155,8 +150,11 @@ describe('buildViralEdl: freezeLoop', () => {
     const signals = computeSignals(f)
     const decision = pickStructure(signals, f.words, f.window.start)
     expect(decision.structure).toBe('freezeLoop')
-    const edl = expectSaneEdl(f, FAKE_SFX)
-    expect(edl.ending.kind).toBe('loop')
+    expect(decision.loopEnding).toBe(true)
+    expect(expectSaneEdl(f, FAKE_SFX).ending.kind).toBe('cut')
+    const looped = expectSaneEdl(f, { ...FAKE_SFX, loop: { endSec: 28, crossfadeSec: 0.06 } })
+    expect(looped.ending).toEqual({ kind: 'loop', crossfadeSec: 0.06 })
+    expect(outputDuration(looped)).toBeLessThanOrEqual(28)
   })
 })
 
@@ -227,5 +225,145 @@ describe('buildViralEdl: degraded input', () => {
     const decision = pickStructure(computeSignals(f), f.words, f.window.start)
     const edl = buildViralEdl(decision, f, FAKE_SFX)
     expect(validateEdl(edl, 0.4)).toEqual([])
+  })
+})
+
+/** A fine (0.1 s) envelope over `total` seconds: `base` dB everywhere with `spans` of another level, clip start = VOD 0. */
+function fineEnvelope(total: number, base: number, spans: { from: number; to: number; db: number }[] = []): Envelope {
+  const db = new Array<number>(Math.round(total * 10)).fill(base)
+  for (const s of spans) for (let i = Math.round(s.from * 10); i < Math.round(s.to * 10); i++) db[i] = s.db
+  return { startSec: 0, stepSec: 0.1, db }
+}
+
+function tightFacts(words: Word[], end = 20): ClipFacts {
+  return facts({ window: { start: 0, end }, words })
+}
+
+describe('buildViralEdit: pacing', () => {
+  const decisionFor = (f: ClipFacts) => ({ ...pickStructure(computeSignals(f), f.words, f.window.start), structure: 'tightCut' as const })
+
+  it('cuts a 1.7 s pause down to about 0.30 s, at least 0.15 s of air each side', () => {
+    const words = [...speech(0, 6, 0.4), ...speech(4, 6, 0.4)] // a hole between the word ending at 2.3 and the one at 4
+    const f = tightFacts(words)
+    const { edl, stats } = buildViralEdit(decisionFor(f), f)
+    expect(stats.cuts).toBe(1)
+    const [a, b] = edl.segments
+    const kept = 1.7 - (b!.srcStart - a!.srcEnd)
+    expect(kept).toBeCloseTo(0.3, 2)
+    expect(kept / 2).toBeGreaterThanOrEqual(0.15 - 1e-9)
+    expect(stats.minKeptGap).toBeCloseTo(0.3, 2)
+  })
+
+  it('leaves a 0.45 s pause alone (under the 0.5 s trigger)', () => {
+    const f = tightFacts([...speech(0, 4, 0.4), ...speech(1.95, 4, 0.4)])
+    expect(buildViralEdit(decisionFor(f), f).stats.cuts).toBe(0)
+  })
+
+  it('needs a 0.7 s pause before cutting one with loud game sound in it', () => {
+    // The 0.6 s pause sits between the word ending at 1.3 and the one starting at 1.9.
+    const words: Word[] = [
+      { t0: 0, t1: 0.3, text: 'so' },
+      { t0: 0.35, t1: 0.65, text: 'watch' },
+      { t0: 0.7, t1: 1.3, text: 'this' },
+      { t0: 1.9, t1: 2.2, text: 'now' },
+      { t0: 2.25, t1: 2.55, text: 'okay' }
+    ]
+    const f = tightFacts(words)
+    const quiet = fineEnvelope(20, -50, [{ from: 0, to: 1.3, db: -20 }, { from: 1.9, to: 2.55, db: -20 }])
+    const loud = fineEnvelope(20, -50, [{ from: 0, to: 2.55, db: -20 }])
+    expect(buildViralEdit(decisionFor(f), f, { envelope: quiet }).stats.cuts).toBe(1)
+    const withGame = buildViralEdit(decisionFor(f), f, { envelope: loud }).stats
+    expect(withGame.cuts).toBe(0)
+    expect(withGame.loudGapsKept).toBe(1)
+  })
+
+  it('cuts a pause over 0.7 s even with loud game sound', () => {
+    const words: Word[] = [
+      { t0: 0, t1: 0.3, text: 'so' },
+      { t0: 0.35, t1: 0.65, text: 'watch' },
+      { t0: 2, t1: 2.3, text: 'this' },
+      { t0: 2.35, t1: 2.65, text: 'now' }
+    ]
+    const f = tightFacts(words)
+    const loud = fineEnvelope(20, -50, [{ from: 0, to: 0.65, db: -20 }, { from: 2, to: 2.65, db: -20 }, { from: 0.65, to: 2, db: -22 }])
+    expect(buildViralEdit(decisionFor(f), f, { envelope: loud }).stats.cuts).toBe(1)
+  })
+
+  it('trims leading silence over 0.3 s down to 0.15 s, and leaves a shorter one alone', () => {
+    const f = tightFacts(speech(2, 10, 0.4))
+    const { edl, stats } = buildViralEdit(decisionFor(f), f)
+    expect(edl.segments[0]!.srcStart).toBeCloseTo(1.85, 6)
+    expect(stats.firstEventSec).toBeCloseTo(2, 6)
+    const g = tightFacts(speech(0.25, 10, 0.4))
+    expect(buildViralEdit(decisionFor(g), g).edl.segments[0]!.srcStart).toBe(0)
+  })
+
+  it('finds the first reaction from loudness when there are no words', () => {
+    const f = facts({ window: { start: 0, end: 20 } })
+    const env = fineEnvelope(20, -45, [{ from: 3, to: 5, db: -15 }])
+    const { edl, stats } = buildViralEdit(decisionFor(f), f, { envelope: env })
+    expect(stats.firstEventSec).toBeCloseTo(3, 1)
+    expect(edl.segments[0]!.srcStart).toBeCloseTo(2.85, 1)
+  })
+
+  it('keeps the reaction beat and about a second after it, and stops at the clip end', () => {
+    const f = facts({ window: { start: 0, end: 30 }, words: speech(0, 10, 0.4), loudness: loudness(30, 12, 2, -5) })
+    const { edl } = buildViralEdit(decisionFor(f), f)
+    const end = edl.segments[edl.segments.length - 1]!.srcEnd
+    // Peak second 12, the loud seconds run to 14: the end is that plus the 1 s run-out.
+    expect(end).toBeGreaterThanOrEqual(12.5 + 1)
+    expect(end).toBeLessThanOrEqual(30)
+  })
+
+  it('keeps everything when the edit is skipped (plain)', () => {
+    const f = tightFacts(speech(2, 10, 0.4), 12)
+    const { edl, stats } = buildViralEdit(decisionFor(f), f, { plain: true })
+    expect(edl.segments).toEqual([{ srcStart: 0, srcEnd: 12, speed: 1 }])
+    expect(stats.cuts).toBe(0)
+  })
+
+  it('ends a looped edit where it is told to', () => {
+    const f = tightFacts(speech(0, 20, 0.4), 30)
+    const { edl } = buildViralEdit(decisionFor(f), f, { loop: { endSec: 8.4, crossfadeSec: 0.06 } })
+    expect(edl.segments[edl.segments.length - 1]!.srcEnd).toBeCloseTo(8.4, 6)
+    expect(edl.ending).toEqual({ kind: 'loop', crossfadeSec: 0.06 })
+  })
+})
+
+describe('coldOpenVariantEdl', () => {
+  const plan = (over: Partial<ColdOpenPlan> = {}): ColdOpenPlan => ({
+    qualifies: true,
+    confidence: 0.9,
+    llm: 'unavailable',
+    payoffVodSec: 20,
+    previewSec: 2,
+    finalSec: 22,
+    segments: [{ srcStart: 19, srcEnd: 21 }, { srcStart: 0, srcEnd: 20 }],
+    capFit: capFit(22),
+    reasons: [],
+    ...over
+  })
+  const straight = () => {
+    const f = tightFacts(speech(0, 45, 0.4), 20)
+    return buildViralEdit({ ...pickStructure(computeSignals(f), f.words, 0), structure: 'tightCut' }, f, FAKE_SFX)
+  }
+
+  it('puts the preview first, a whoosh on the join, and shifts every cue by its length', () => {
+    const { edl } = straight()
+    const cold = coldOpenVariantEdl(edl, plan(), FAKE_SFX)!
+    expect(cold.segments[0]).toEqual({ srcStart: 19, srcEnd: 21, speed: 1 })
+    expect(cold.segments.slice(1)).toEqual(edl.segments)
+    expect(outputDuration(cold)).toBeCloseTo(outputDuration(edl) + 2, 6)
+    expect(cold.sfx.find((s) => s.file === 'whoosh.wav')!.t).toBeCloseTo(2, 6)
+    const boom = edl.sfx.find((s) => s.file === 'boom.wav')!
+    expect(cold.sfx.find((s) => s.file === 'boom.wav')!.t).toBeCloseTo(boom.t + 2, 6)
+    expect(cold.zoom[0]).toEqual({ t: 0, scale: 1, ease: 'snap' })
+    expect(validateEdl(cold, 22)).toEqual([])
+  })
+
+  it('never loops and returns null when the plan does not qualify', () => {
+    const { edl } = straight()
+    expect(coldOpenVariantEdl({ ...edl, ending: { kind: 'loop', crossfadeSec: 0.06 } }, plan())!.ending).toEqual({ kind: 'cut' })
+    expect(coldOpenVariantEdl(edl, plan({ qualifies: false, segments: [] }))).toBeNull()
   })
 })

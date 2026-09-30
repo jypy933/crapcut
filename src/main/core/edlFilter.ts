@@ -213,30 +213,14 @@ function spliceFreezeAudio(parts: string[], pad: string, freeze: readonly Freeze
 }
 
 /**
- * A seamless loop ending: instead of crossfading the whole clip against
- * itself (which balloons the duration -- `xfade` buffers every frame of both
- * inputs), only short tail/head sub-clips are crossfaded, and the rest of the
- * clip is concatenated back on unmodified.
+ * A loop ending is a hard cut for the video (nothing is added, no end card):
+ * only the audio changes, fading out at the very end and back in at the very
+ * start over `crossfadeSec`, which is what a crossfade across the replay seam
+ * amounts to inside one file, and keeps the seam from clicking.
  */
-function spliceLoopVideo(parts: string[], pad: string, mainDuration: number, introSec: number, crossfadeSec: number): string {
-  const tailStart = Math.max(0, mainDuration - crossfadeSec)
-  const ins = splitLabel(parts, pad, 3, 'vloopin', false)
-  parts.push(`[${ins[0]}]trim=start=${fmtT(0)}:end=${fmtT(tailStart)},setpts=PTS-STARTPTS[vloopbody]`)
-  parts.push(`[${ins[1]}]trim=start=${fmtT(tailStart)}:end=${fmtT(mainDuration)},setpts=PTS-STARTPTS[vlooptail]`)
-  parts.push(`[${ins[2]}]trim=start=${fmtT(0)}:end=${fmtT(introSec)},setpts=PTS-STARTPTS[vloophead]`)
-  parts.push(`[vlooptail][vloophead]xfade=transition=fade:duration=${fmtT(crossfadeSec)}:offset=0[vloopjoin]`)
-  parts.push('[vloopbody][vloopjoin]concat=n=2:v=1:a=0[vloop]')
-  return 'vloop'
-}
-
-function spliceLoopAudio(parts: string[], pad: string, mainDuration: number, introSec: number, crossfadeSec: number): string {
-  const tailStart = Math.max(0, mainDuration - crossfadeSec)
-  const ins = splitLabel(parts, pad, 3, 'aloopin', true)
-  parts.push(`[${ins[0]}]atrim=start=${fmtT(0)}:end=${fmtT(tailStart)},asetpts=PTS-STARTPTS[aloopbody]`)
-  parts.push(`[${ins[1]}]atrim=start=${fmtT(tailStart)}:end=${fmtT(mainDuration)},asetpts=PTS-STARTPTS[alooptail]`)
-  parts.push(`[${ins[2]}]atrim=start=${fmtT(0)}:end=${fmtT(introSec)},asetpts=PTS-STARTPTS[aloophead]`)
-  parts.push(`[alooptail][aloophead]acrossfade=d=${fmtT(crossfadeSec)}[aloopjoin]`)
-  parts.push('[aloopbody][aloopjoin]concat=n=2:v=0:a=1[aloop]')
+function loopSeamAudio(parts: string[], pad: string, total: number, crossfadeSec: number): string {
+  const fadeOutStart = Math.max(0, total - crossfadeSec)
+  parts.push(`[${pad}]afade=t=in:st=0:d=${fmtT(crossfadeSec)}:curve=qsin,afade=t=out:st=${fmtT(fadeOutStart)}:d=${fmtT(crossfadeSec)}:curve=qsin[aloop]`)
   return 'aloop'
 }
 
@@ -288,7 +272,6 @@ export function edlVideoFilter(spec: EdlRenderSpec): string {
   const parts: string[] = []
   const out = spec.outputSize ?? OUTPUT_SIZE[spec.format]
   const fps = edlFps(spec)
-  const mainDuration = concatDuration(spec.edl.segments) + freezeTotal(spec.edl.freeze)
   const total = outputDuration(spec.edl)
 
   const vseg = segmentVideoChain(parts, '0:v', spec.edl.segments)
@@ -303,8 +286,6 @@ export function edlVideoFilter(spec: EdlRenderSpec): string {
   pad = assStage(pad, parts, spec.overlayAssFile, spec.fontsDir, 'vovl')
   parts.push(`[${pad}]format=yuv420p[vcore]`)
   pad = 'vcore'
-
-  if (spec.edl.ending.kind === 'loop') pad = spliceLoopVideo(parts, pad, mainDuration, spec.edl.ending.introSec, spec.edl.ending.crossfadeSec)
 
   // A safety net against the frame this many splices can drift by: the final
   // length always matches `outputDuration(edl)` exactly.
@@ -374,7 +355,7 @@ export function edlAudioFilter(spec: EdlRenderSpec): { inputs: string[][]; filte
   parts.push(`[${corePad}]${loudnormFilter(spec.loudness)}[acore]`)
   let pad = 'acore'
 
-  if (spec.edl.ending.kind === 'loop') pad = spliceLoopAudio(parts, pad, mainDuration, spec.edl.ending.introSec, spec.edl.ending.crossfadeSec)
+  if (spec.edl.ending.kind === 'loop') pad = loopSeamAudio(parts, pad, total, spec.edl.ending.crossfadeSec)
 
   parts.push(`[${pad}]atrim=start=${fmtT(0)}:end=${fmtT(total)},asetpts=PTS-STARTPTS[aout]`)
   return { inputs, filter: parts.join(';') }

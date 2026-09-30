@@ -165,6 +165,8 @@ interface Case {
   facts: ClipFacts
   /** Overrides the heuristic pick, for structures (chatFirst) normally only reached via the LLM tie-break. */
   force?: Partial<StructureDecision>
+  /** A loop ending, which the rule engine only passes in for a version whose seam it approved. */
+  loop?: { endSec: number; crossfadeSec: number }
 }
 
 const cases: Case[] = [
@@ -199,7 +201,8 @@ const cases: Case[] = [
   },
   {
     name: 'freezeLoop',
-    facts: facts({ loudness: burstLoudness(CLIP_LENGTH, -25, [{ at: 21, len: 2, db: -5 }]) })
+    facts: facts({ loudness: burstLoudness(CLIP_LENGTH, -25, [{ at: 21, len: 2, db: -5 }]) }),
+    loop: { endSec: 24, crossfadeSec: 0.06 }
   },
   {
     name: 'chatFirst',
@@ -218,7 +221,7 @@ describe.skipIf(!ffmpeg || !ffprobe)('viral edit house look (real FFmpeg)', () =
 
         const signals = computeSignals(c.facts)
         const decision: StructureDecision = { ...pickStructure(signals, c.facts.words, c.facts.window.start), structure: c.name, ...c.force }
-        const edl = buildViralEdl(decision, c.facts, options)
+        const edl = buildViralEdl(decision, c.facts, { ...options, loop: c.loop })
 
         const out = await renderEdl(dir, edl)
         const frame = 1 / SOURCE_FPS
@@ -244,12 +247,13 @@ describe.skipIf(!ffmpeg || !ffprobe)('viral edit house look (real FFmpeg)', () =
         expect(loudness).toBeLessThan(-11)
 
         if (c.name === 'payoffFirst') {
-          // The cold open's first frame is the source frame at the cold-open's own start.
-          expect(decision.coldOpenSpan).toBeDefined()
+          // Nothing is replayed: the first frame is the source frame where the one segment starts.
+          expect(edl.segments.length).toBe(1)
           const outFrame = extractFrameRgb(join(dir, 'out.mp4'), 0, 32, 18)
-          const srcFrame = extractFrameRgb(join(dir, 'in.mp4'), decision.coldOpenSpan!.start, 32, 18)
+          const srcFrame = extractFrameRgb(join(dir, 'in.mp4'), edl.segments[0]!.srcStart, 32, 18)
           expect(meanAbsDiff(outFrame, srcFrame)).toBeLessThan(20)
         }
+        if (c.loop) expect(edl.ending).toEqual({ kind: 'loop', crossfadeSec: 0.06 })
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }

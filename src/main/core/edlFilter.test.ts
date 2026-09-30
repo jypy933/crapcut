@@ -135,12 +135,10 @@ describe('edlVideoFilter', () => {
     expect(f).not.toContain('drawtext')
   })
 
-  it('splices a short tail/head crossfade for a loop ending, not a full-length xfade', () => {
-    const f = edlVideoFilter(spec({ edl: baseEdl({ segments: [seg(0, 10)], ending: { kind: 'loop', introSec: 2, crossfadeSec: 0.5 } }) }))
-    expect(f).toContain('xfade=transition=fade:duration=0.500000:offset=0')
-    // The crossfade only ever sees the short head/tail sub-clips, not the whole 10s body.
-    expect(f).toContain('trim=start=9.500000:end=10.000000')
-    expect(f).toContain('trim=start=0.000000:end=2.000000')
+  it('leaves the video alone for a loop ending: a hard cut, no crossfade or appended intro', () => {
+    const f = edlVideoFilter(spec({ edl: baseEdl({ segments: [seg(0, 10)], ending: { kind: 'loop', crossfadeSec: 0.06 } }) }))
+    expect(f).not.toContain('xfade')
+    expect(f).toContain('trim=start=0.000000:end=10.000000')
   })
 
   it('trims to the exact computed output duration as a final safety net', () => {
@@ -189,6 +187,18 @@ describe('edlAudioFilter', () => {
   it('fills silence for a freeze hold', () => {
     const a = edlAudioFilter(spec({ edl: baseEdl({ segments: [seg(0, 10)], freeze: [{ atOutputT: 4, holdSec: 1 }] }) }))
     expect(a.filter).toContain('anullsrc=r=48000:cl=stereo:d=1.000000')
+  })
+})
+
+describe('loop ending audio', () => {
+  it('fades the audio out at the end and in at the start over the seam crossfade', () => {
+    const a = edlAudioFilter(spec({ edl: baseEdl({ segments: [seg(0, 10)], ending: { kind: 'loop', crossfadeSec: 0.06 } }) }))
+    expect(a.filter).toContain('afade=t=in:st=0:d=0.060000')
+    expect(a.filter).toContain('afade=t=out:st=9.940000:d=0.060000')
+  })
+
+  it('adds nothing for a cut ending', () => {
+    expect(edlAudioFilter(spec()).filter).not.toContain('afade')
   })
 })
 

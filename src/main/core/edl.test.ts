@@ -7,6 +7,7 @@ import {
   outputDuration,
   segmentDuration,
   segmentStarts,
+  sourceToOutputTime,
   validateEdl,
   type Edl,
   type EdlSegment
@@ -49,9 +50,9 @@ describe('freezeTotal / outputDuration', () => {
     expect(outputDuration(edl)).toBeCloseTo(11.5, 6)
   })
 
-  it('adds the loop replay minus its crossfade', () => {
-    const edl = baseEdl({ segments: [seg(0, 10)], ending: { kind: 'loop', introSec: 2, crossfadeSec: 0.5 } })
-    expect(outputDuration(edl)).toBeCloseTo(11.5, 6)
+  it('a loop ending adds nothing: the seam is a hard cut with an audio fade', () => {
+    const edl = baseEdl({ segments: [seg(0, 10)], ending: { kind: 'loop', crossfadeSec: 0.06 } })
+    expect(outputDuration(edl)).toBeCloseTo(10, 6)
   })
 
   it('a cut ending adds nothing', () => {
@@ -135,8 +136,25 @@ describe('validateEdl', () => {
     expect(validateEdl(baseEdl({ segments: [seg(0, 5)], sfx: [{ t: 10, file: 'x.wav', gainDb: 0 }] }), 30).length).toBeGreaterThan(0)
   })
 
-  it('flags a loop ending whose crossfade does not fit its intro', () => {
-    expect(validateEdl(baseEdl({ ending: { kind: 'loop', introSec: 1, crossfadeSec: 2 } }), 30).length).toBeGreaterThan(0)
-    expect(validateEdl(baseEdl({ ending: { kind: 'loop', introSec: 1, crossfadeSec: 0 } }), 30).length).toBeGreaterThan(0)
+  it('flags a loop ending without a usable crossfade', () => {
+    expect(validateEdl(baseEdl({ ending: { kind: 'loop', crossfadeSec: 0 } }), 30).length).toBeGreaterThan(0)
+    expect(validateEdl(baseEdl({ segments: [seg(0, 0.05)], ending: { kind: 'loop', crossfadeSec: 0.06 } }), 30).length).toBeGreaterThan(0)
+    expect(validateEdl(baseEdl({ ending: { kind: 'loop', crossfadeSec: 0.06 } }), 30)).toEqual([])
+  })
+})
+
+describe('sourceToOutputTime', () => {
+  it('lands a source second on the output timeline, after freezes', () => {
+    expect(sourceToOutputTime([seg(2, 10)], [{ atOutputT: 1, holdSec: 0.5 }], 5, false)).toBeCloseTo(3.5, 6)
+  })
+
+  it('picks the first or the last use of a reused segment', () => {
+    const segs = [seg(4, 6), seg(0, 10)]
+    expect(sourceToOutputTime(segs, [], 5, false)).toBeCloseTo(1, 6)
+    expect(sourceToOutputTime(segs, [], 5, true)).toBeCloseTo(7, 6)
+  })
+
+  it('clamps a second inside a trimmed gap to the nearest kept moment', () => {
+    expect(sourceToOutputTime([seg(0, 2), seg(5, 8)], [], 3, false)).toBeCloseTo(2, 6)
   })
 })

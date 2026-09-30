@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react'
+import { FINAL_FLOOR_SEC } from '@shared/editPlan'
 import type { Range, Word } from '@shared/types'
 
 interface Props {
@@ -10,7 +11,8 @@ interface Props {
   onChange: (r: Range) => void
 }
 
-const MIN_LEN = 3
+/** The handles stop at the final-length floor, the same limit the main process enforces on a trim. */
+const MIN_LEN = FINAL_FLOOR_SEC
 
 /** Trim bar: the downloaded range, the cut (drag the handles) and the playhead. */
 export function Timeline({ bounds, value, time, words, onSeek, onChange }: Props): ReactNode {

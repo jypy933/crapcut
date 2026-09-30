@@ -1,6 +1,7 @@
 // Types shared by the main process and the renderer. Plain data only.
 
 import type { CaptionStyleId } from './captionStyles'
+import type { ClipEditPlan } from './editPlan'
 import type { FormatPositions } from './overlayPosition'
 import type { StructureDecision } from './structure'
 
@@ -180,6 +181,14 @@ export interface Clip {
   structureDecision: StructureDecision | null
   /** Applies the automatic viral edit at export; on by default, off per clip. */
   autoEdit: boolean
+  /**
+   * What the auto edit's rule engine decided (final length, per-platform cap
+   * fit, cold-open plan and confidence, loop eligibility and seam score);
+   * see `main/core/editPlan.ts`. Set when moments are found and refreshed
+   * whenever the edit is built for a preview or an export; missing on a clip
+   * saved before it existed.
+   */
+  editPlan?: ClipEditPlan
 }
 
 export type LayoutKind = 'cam_game' | 'blur_fill' | 'center_crop'

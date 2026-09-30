@@ -99,7 +99,7 @@ function audioSeries(facts: ClipFacts, seconds: number): Float64Array | null {
 }
 
 /** One value per second of the clip: distinct-chatter reaction weight, or null with no chat at all. */
-function chatSeries(facts: ClipFacts, seconds: number): Float64Array | null {
+export function chatSeries(facts: ClipFacts, seconds: number): Float64Array | null {
   if (facts.chatMessages.length === 0) return null
   const relative = facts.chatMessages.map((m) => ({ ...m, t: m.t - facts.window.start })).filter((m) => m.t >= -CHAT_WINDOW_SEC && m.t < seconds + CHAT_WINDOW_SEC)
   if (relative.length === 0) return null

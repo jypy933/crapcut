@@ -1,22 +1,24 @@
 // Turns one accepted clip's structure decision (`structurePick.ts`) into a
 // full re-edit: the one evidence-based "house look" (silences trimmed but the
 // pre-punchline pause kept, a single snap punch-in zoom on the peak, sound
-// effects used sparingly, a loop ending where the structure calls for one)
+// effects used sparingly, a loop ending when the rule engine allows one)
 // applied through a small per-structure recipe. Pure: no I/O, no FFmpeg.
 // `edlFilter.ts` turns the result into a filter graph and `edlCaptions.ts`
 // remaps the clip's own words onto it; nothing here invents on-screen text --
 // a quote card or chat bubble only ever repeats the clip's own words or a
 // real chat message.
 //
-// `buildViralEdl` only takes the structure decision, the clip's facts and the
-// SFX file paths: everything else (where the peak sits, how much build-up
+// `buildViralEdit` only takes the structure decision, the clip's facts and the
+// SFX file paths (plus the rule engine's own switches, see `ViralEditOptions`): everything else (where the peak sits, how much build-up
 // there is, the sub-peaks) is recomputed from `computeSignals(facts)`, the
 // same pure function `structurePick.ts` used to make the decision in the
 // first place, so the two are always consistent with each other.
 
 import type { ChatMessage, Word } from '@shared/types'
+import type { ColdOpenPlan } from '@shared/editPlan'
 import type { Edl, EdlSegment, Ending, FreezeCue, OverlayCue, SfxCue, ZoomKeyframe } from './edl'
-import { concatDuration, concatToOutputTime, freezeTotal, mapSourceTimeToConcat, segmentDuration } from './edl'
+import { concatDuration, freezeTotal, segmentDuration, sourceToOutputTime } from './edl'
+import { dbAt, EDIT_RULES, envelopeFromLoudness, firstEventSec, hookStartSec, isLoudGap, medianDb, shiftEnvelope, speechFloorDb, type Envelope } from './editRules'
 import type { StructureDecision } from './structurePick'
 import { computeSignals, type ClipFacts, type StructureSignals, type WordSpan } from './structureSignals'
 import { wordsIn } from './transcript'
@@ -30,23 +32,45 @@ export interface ViralEditOptions {
    * degrades to no sound effect there, never a crash or a placeholder.
    */
   sfx?: Partial<Record<SfxKind, string>>
+  /**
+   * A finer loudness envelope than the job's per-second log (measured from the
+   * downloaded clip at edit time, VOD seconds). Lets the pacing tell game
+   * sound in a pause from dead air; without it the log is used.
+   */
+  envelope?: Envelope | null
+  /** Skip the pause, lead-in and tail trimming (the edit the 10 s floor gave up on): the whole cut is kept as one segment. */
+  plain?: boolean
+  /** End the edit here (clip-relative seconds) with a replay-friendly loop ending. */
+  loop?: { endSec: number; crossfadeSec: number } | null
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n))
 
 // --- silence trimming -------------------------------------------------
 
-/** A gap shorter than this is normal speech pacing and is left alone. */
-const TRIM_GAP_THRESHOLD = 0.5
-/** A gap this small is what a trimmed silence is cut down to (0.1-0.25 s). */
-const TRIM_TARGET = 0.18
-/** rapidFire's tighter version of the same two constants. */
-const TIGHT_GAP_THRESHOLD = 0.35
-const TIGHT_TRIM_TARGET = 0.12
-/** The pause right before the peak/punchline is kept, up to this long (0.3-0.6 s). */
-const PRE_PEAK_MAX_KEEP = 0.6
-/** A little natural air kept before the first word and after the last, so a cut does not clip a word's onset. */
-const EDGE_PADDING = 0.15
+/** What the pacing pass did, for the rule engine's log line and checks. */
+export interface PacingStats {
+  /** Pauses cut down. */
+  cuts: number
+  savedSec: number
+  /** The least air left around a cut, both sides together (at least twice `minSideSec`); null with no cuts. */
+  minKeptGap: number | null
+  /** Pauses long enough to cut that were left because loud game sound sat in them. */
+  loudGapsKept: number
+  /** Clip-relative second of the first speech or reaction, before trimming; null with neither. */
+  firstEventSec: number | null
+  /** Clip-relative seconds the edit starts and ends at. */
+  startSec: number
+  endSec: number
+}
+
+interface PacingContext {
+  /** Clip-relative loudness, or null. */
+  env: Envelope | null
+  tight: boolean
+  plain: boolean
+  loopEndSec: number | null
+}
 
 /** The last gap between two words that sits entirely before `peakSrcT`, or -1 with none. */
 function findPrePeakGapIndex(words: Word[], peakSrcT: number): number {
@@ -58,69 +82,102 @@ function findPrePeakGapIndex(words: Word[], peakSrcT: number): number {
   return idx
 }
 
-/**
- * Base pass shared by every structure: cuts dead air between words down to a
- * short trim, except the one pause right before the peak, which is left
- * alone up to `PRE_PEAK_MAX_KEEP` (only a longer one gets capped, never
- * stretched -- there is no audio to invent). With no words at all (a
- * transcript-free degraded clip) the whole clip is kept as one segment.
- */
-function trimSilences(words: Word[], clipLength: number, peakSrcT: number, tight: boolean): EdlSegment[] {
-  if (words.length === 0 || clipLength <= 0) return [{ srcStart: 0, srcEnd: Math.max(0.05, clipLength), speed: 1 }]
+/** Where a word's sound really stops: its end, or later while the envelope stays at speech level (whisper's word ends sit early). */
+function speechTail(env: Envelope | null, floorDb: number | null, wordEnd: number): number {
+  if (!env || floorDb === null) return wordEnd
+  let end = wordEnd
+  const limit = wordEnd + EDIT_RULES.loop.wordEndEarlySec + env.stepSec
+  for (let t = wordEnd; t < limit; t += env.stepSec) {
+    const db = dbAt(env, t)
+    if (db === null || db < floorDb) break
+    end = t + env.stepSec
+  }
+  return end
+}
 
-  const threshold = tight ? TIGHT_GAP_THRESHOLD : TRIM_GAP_THRESHOLD
-  const target = tight ? TIGHT_TRIM_TARGET : TRIM_TARGET
+/** Where the edit ends: the reaction's end plus a short tail, never inside the reaction beat after the payoff. */
+function endSecFor(words: Word[], clipLength: number, peakSrcT: number, env: Envelope | null): number {
+  const { reactionBeatMinSec, reactionSearchSec, endAfterReactionSec } = EDIT_RULES.pacing
+  let reactionEnd = Math.max(words[words.length - 1]!.t1, peakSrcT + reactionBeatMinSec)
+  const median = medianDb(env, 0, clipLength)
+  if (env && median !== null) {
+    const above = median + EDIT_RULES.hook.reactionAboveMedianDb
+    // Loud frames running on from the payoff are still the reaction.
+    for (let t = Math.floor(peakSrcT / env.stepSec) * env.stepSec; t < peakSrcT + reactionSearchSec; t += env.stepSec) {
+      const db = dbAt(env, t)
+      if (db === null || db < above) {
+        if (t > peakSrcT) break
+        continue
+      }
+      reactionEnd = Math.max(reactionEnd, t + env.stepSec)
+    }
+  }
+  return Math.min(clipLength, reactionEnd + endAfterReactionSec)
+}
+
+/**
+ * Base pass shared by every structure. Cuts dead air between words down to
+ * `keepGapSec` (at least `minSideSec` of air either side of the cut), except
+ * the one pause right before the peak, which is left alone up to
+ * `prePeakMaxKeepSec` (only a longer one gets capped, never stretched -- there
+ * is no audio to invent). A pause with loud game sound in it needs to be
+ * longer before it is cut, and no cut lands inside a word or the sound of a
+ * word's tail. Leading silence over `trimOverSec` is cut down to `keepSec`;
+ * the tail keeps the reaction beat and a short run-out (`endSecFor`). With no
+ * words at all (a transcript-free degraded clip) the whole clip is kept as one
+ * segment, apart from a reaction lead-in.
+ */
+function trimSilences(words: Word[], clipLength: number, peakSrcT: number, ctx: PacingContext): { segments: EdlSegment[]; stats: PacingStats } {
+  const stats: PacingStats = { cuts: 0, savedSec: 0, minKeptGap: null, loudGapsKept: 0, firstEventSec: null, startSec: 0, endSec: Math.max(0.05, clipLength) }
+  if (clipLength <= 0) return { segments: [{ srcStart: 0, srcEnd: 0.05, speed: 1 }], stats }
+  const first = firstEventSec(words, ctx.env, { from: 0, to: clipLength })
+  stats.firstEventSec = first
+  if (ctx.plain) return { segments: [{ srcStart: 0, srcEnd: clipLength, speed: 1 }], stats }
+
+  const start = hookStartSec(first)
+  if (words.length === 0) {
+    stats.startSec = start
+    return { segments: [{ srcStart: start, srcEnd: Math.max(start + 0.05, clipLength), speed: 1 }], stats }
+  }
+
+  const { pauseSec, loudGamePauseSec, tightPauseSec, keepGapSec, minSideSec, prePeakMaxKeepSec } = EDIT_RULES.pacing
   const prePeakGap = findPrePeakGapIndex(words, peakSrcT)
+  const floorDb = speechFloorDb(ctx.env, words)
 
   const segments: EdlSegment[] = []
-  let segStart = Math.max(0, words[0]!.t0 - EDGE_PADDING)
+  let segStart = start
   for (let i = 0; i < words.length - 1; i++) {
     const w = words[i]!
     const next = words[i + 1]!
     const gap = next.t0 - w.t1
     const isPrePeak = i === prePeakGap
-    const cutAbove = isPrePeak ? PRE_PEAK_MAX_KEEP : threshold
-    if (gap <= cutAbove) continue
-    const keep = isPrePeak ? PRE_PEAK_MAX_KEEP : target
-    const segEnd = w.t1 + keep / 2
-    segments.push({ srcStart: segStart, srcEnd: Math.max(segStart + 0.02, segEnd), speed: 1 })
-    segStart = Math.max(segEnd, next.t0 - keep / 2)
-  }
-  const lastEnd = clamp(words[words.length - 1]!.t1 + EDGE_PADDING, segStart + 0.05, clipLength)
-  segments.push({ srcStart: segStart, srcEnd: lastEnd, speed: 1 })
-  return segments
-}
-
-// --- source time -> output time ----------------------------------------
-
-/** The nearest point in any segment's source range to `srcT` (for a time that fell in a trimmed gap). */
-function nearestSegmentClamp(segments: readonly EdlSegment[], srcT: number): number {
-  let best = segments[0]!.srcStart
-  let bestDist = Infinity
-  for (const s of segments) {
-    const c = clamp(srcT, s.srcStart, s.srcEnd)
-    const dist = Math.abs(c - srcT)
-    if (dist < bestDist) {
-      bestDist = dist
-      best = c
+    const loud = isLoudGap(ctx.env, floorDb, w.t1, next.t0)
+    const cutAbove = isPrePeak ? prePeakMaxKeepSec : ctx.tight ? tightPauseSec : loud ? loudGamePauseSec : pauseSec
+    if (gap <= cutAbove) {
+      if (loud && gap > pauseSec) stats.loudGapsKept++
+      continue
     }
+    const keep = isPrePeak ? prePeakMaxKeepSec : keepGapSec
+    const segEnd = Math.max(w.t1 + keep / 2, speechTail(ctx.env, floorDb, w.t1) + minSideSec)
+    const nextStart = Math.min(next.t0 - keep / 2, next.t0 - minSideSec)
+    // Not worth a cut that would take out less than a tenth of a second.
+    if (nextStart - segEnd < 0.1) continue
+    segments.push({ srcStart: segStart, srcEnd: Math.max(segStart + 0.02, segEnd), speed: 1 })
+    segStart = nextStart
+    stats.cuts++
+    stats.savedSec += nextStart - segEnd
+    // The air left around the cut, both sides together.
+    stats.minKeptGap = Math.min(stats.minKeptGap ?? Infinity, gap - (nextStart - segEnd))
   }
-  return best
+  const wanted = ctx.loopEndSec ?? endSecFor(words, clipLength, peakSrcT, ctx.env)
+  const lastEnd = clamp(wanted, segStart + 0.05, Math.max(segStart + 0.05, clipLength))
+  segments.push({ srcStart: segStart, srcEnd: lastEnd, speed: 1 })
+  stats.startSec = start
+  stats.endSec = lastEnd
+  return { segments, stats }
 }
 
-/**
- * Where a source-clip second lands on the final output timeline, after
- * segment reordering/trimming and any freezes. `useLast` picks the later
- * occurrence when a segment is reused (a cold open replays part of the
- * clip): the real payoff, not the flashed-forward hook. A source time inside
- * a trimmed-out gap is clamped to the nearest kept moment instead of being
- * dropped, so a cue never silently disappears.
- */
-function srcToOutput(segments: readonly EdlSegment[], freeze: readonly FreezeCue[], srcT: number, useLast: boolean): number {
-  const concatTimes = mapSourceTimeToConcat(segments, srcT)
-  const concatT = concatTimes.length > 0 ? concatTimes[useLast ? concatTimes.length - 1 : 0]! : mapSourceTimeToConcat(segments, nearestSegmentClamp(segments, srcT))[0] ?? 0
-  return concatToOutputTime(freeze, concatT)
-}
+const srcToOutput = sourceToOutputTime
 
 // --- the punch-in zoom ---------------------------------------------------
 
@@ -197,19 +254,6 @@ function maxZoomCount(clipLength: number): number {
   return Math.max(1, Math.round((clipLength / 17.5) * 1.5))
 }
 
-// --- the loop ending ------------------------------------------------------
-
-const LOOP_INTRO_MAX = 1.4
-const LOOP_CROSSFADE_RATIO = 0.65
-
-/** A short, seamless loop back to the start -- "no longer than the clip plus a short freeze". */
-function loopEndingFor(mainDuration: number): Ending {
-  const cap = Math.max(0.1, mainDuration)
-  const introSec = Math.min(LOOP_INTRO_MAX, cap, Math.max(0.3, mainDuration * 0.3))
-  const crossfadeSec = Math.max(0.05, Math.min(introSec - 0.05, introSec * LOOP_CROSSFADE_RATIO))
-  return { kind: 'loop', introSec, crossfadeSec }
-}
-
 // --- sound effects, mixed low ----------------------------------------------
 
 const BOOM_GAIN_DB = -16
@@ -227,7 +271,7 @@ const popCue = (t: number, options: ViralEditOptions): SfxCue[] => sfxCue('pop',
 // --- words and chat, clip-relative -----------------------------------------
 
 /** `facts.words` clipped to the accepted window and shifted so 0 is the clip's own start (the source-clip's time 0). */
-function clipRelativeWords(facts: ClipFacts): Word[] {
+export function clipRelativeWords(facts: ClipFacts): Word[] {
   return wordsIn(facts.words, facts.window.start, facts.window.end)
     .map((w) => ({ t0: Math.max(0, w.t0 - facts.window.start), t1: Math.min(facts.window.end, w.t1) - facts.window.start, text: w.text }))
     .filter((w) => w.t1 > w.t0)
@@ -266,43 +310,31 @@ function finish(r: Recipe): Edl {
   return { segments: r.segments, zoom: r.zoom, freeze: r.freeze, overlays: r.overlays, sfx: r.sfx, ending: r.ending }
 }
 
+/** `options.envelope` here is already clip-relative (see `buildViralEdit`). */
+function pacingContext(options: ViralEditOptions, tight: boolean): PacingContext {
+  return { env: options.envelope ?? null, tight, plain: options.plain === true, loopEndSec: options.loop?.endSec ?? null }
+}
+
 /** The shared "nothing special, just the house look" shape every recipe starts from. */
-function plainRecipe(words: Word[], clipLength: number, peakSrcT: number, tight = false): { segments: EdlSegment[]; freeze: FreezeCue[] } {
-  return { segments: trimSilences(words, clipLength, peakSrcT, tight), freeze: [] }
+function plainRecipe(words: Word[], clipLength: number, peakSrcT: number, options: ViralEditOptions, tight = false): { segments: EdlSegment[]; freeze: FreezeCue[] } {
+  return { segments: trimSilences(words, clipLength, peakSrcT, pacingContext(options, tight)).segments, freeze: [] }
+}
+
+/** A loop is a property of a version, not of a structure: it is there when the rule engine passed one in (`options.loop`), whatever the structure. */
+function endingFor(options: ViralEditOptions): Ending {
+  return options.loop ? { kind: 'loop', crossfadeSec: options.loop.crossfadeSec } : { kind: 'cut' }
 }
 
 function tightCutEdl(words: Word[], clipLength: number, peakSrcT: number, options: ViralEditOptions): Edl {
-  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT)
+  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT, options)
   const peakOut = srcToOutput(segments, freeze, peakSrcT, true)
   const mainDuration = concatDuration(segments)
-  return finish({ segments, freeze, overlays: [], sfx: boomCue(peakOut, options), zoom: snapZoomAtPeak(peakOut, mainDuration), ending: { kind: 'cut' } })
-}
-
-function payoffFirstEdl(decision: StructureDecision, words: Word[], clipLength: number, peakSrcT: number, options: ViralEditOptions): Edl {
-  const cold = decision.coldOpenSpan
-  if (!cold || cold.end <= cold.start) return tightCutEdl(words, clipLength, peakSrcT, options)
-
-  const coldSeg: EdlSegment = { srcStart: clamp(cold.start, 0, clipLength), srcEnd: clamp(cold.end, 0, clipLength), speed: 1 }
-  const { segments: buildUp } = plainRecipe(words, clipLength, peakSrcT)
-  const segments = [coldSeg, ...buildUp]
-  const freeze: FreezeCue[] = []
-
-  const whooshOut = concatToOutputTime(freeze, segmentDuration(coldSeg))
-  const peakOut = srcToOutput(segments, freeze, peakSrcT, true)
-  const mainDuration = concatDuration(segments)
-  return finish({
-    segments,
-    freeze,
-    overlays: [],
-    sfx: [...whooshCue(whooshOut, options), ...boomCue(peakOut, options)],
-    zoom: snapZoomAtPeak(peakOut, mainDuration),
-    ending: { kind: 'cut' }
-  })
+  return finish({ segments, freeze, overlays: [], sfx: boomCue(peakOut, options), zoom: snapZoomAtPeak(peakOut, mainDuration), ending: endingFor(options) })
 }
 
 function quoteCardEdl(decision: StructureDecision, facts: ClipFacts, words: Word[], clipLength: number, peakSrcT: number, options: ViralEditOptions): Edl {
   const text = spanText(facts, decision.quoteSpan)
-  const { segments } = plainRecipe(words, clipLength, peakSrcT)
+  const { segments } = plainRecipe(words, clipLength, peakSrcT, options)
   const freeze: FreezeCue[] = []
   const overlays: OverlayCue[] = []
   let sfx: SfxCue[] = []
@@ -321,20 +353,20 @@ function quoteCardEdl(decision: StructureDecision, facts: ClipFacts, words: Word
     overlays,
     sfx: [...sfx, ...boomCue(peakOut, options)],
     zoom: snapZoomAtPeak(peakOut, mainDuration),
-    ending: decision.loopEnding ? loopEndingFor(mainDuration) : { kind: 'cut' }
+    ending: endingFor(options)
   })
 }
 
 function buildAndPunchEdl(words: Word[], clipLength: number, peakSrcT: number, options: ViralEditOptions): Edl {
-  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT)
+  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT, options)
   const setupOut = srcToOutput(segments, freeze, 0, false)
   const peakOut = srcToOutput(segments, freeze, peakSrcT, true)
   const mainDuration = concatDuration(segments)
-  return finish({ segments, freeze, overlays: [], sfx: boomCue(peakOut, options), zoom: pushThenSnapZoom(setupOut, peakOut, mainDuration), ending: { kind: 'cut' } })
+  return finish({ segments, freeze, overlays: [], sfx: boomCue(peakOut, options), zoom: pushThenSnapZoom(setupOut, peakOut, mainDuration), ending: endingFor(options) })
 }
 
 function chatFirstEdl(decision: StructureDecision, facts: ClipFacts, words: Word[], clipLength: number, peakSrcT: number, options: ViralEditOptions): Edl {
-  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT)
+  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT, options)
   const mainDuration = concatDuration(segments)
 
   const raw = (decision.chatMessageIds ?? [])
@@ -357,55 +389,88 @@ function chatFirstEdl(decision: StructureDecision, facts: ClipFacts, words: Word
   }
 
   const peakOut = srcToOutput(segments, freeze, peakSrcT, true)
-  return finish({ segments, freeze, overlays, sfx: [...sfx, ...boomCue(peakOut, options)], zoom: snapZoomAtPeak(peakOut, mainDuration), ending: { kind: 'cut' } })
+  return finish({ segments, freeze, overlays, sfx: [...sfx, ...boomCue(peakOut, options)], zoom: snapZoomAtPeak(peakOut, mainDuration), ending: endingFor(options) })
 }
 
 function rapidFireEdl(signals: StructureSignals, words: Word[], clipLength: number, peakSrcT: number, options: ViralEditOptions): Edl {
-  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT, true)
+  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT, options, true)
   const mainDuration = concatDuration(segments)
   const candidates = signals.subPeakTimes.length > 0 ? signals.subPeakTimes : [peakSrcT]
   const cappedSrc = capTimeDensity(candidates, clipLength, ZOOM_MIN_SPACING_SEC, maxZoomCount(clipLength))
   const outputs = cappedSrc.map((t) => srcToOutput(segments, freeze, t, true))
   // Sparingly: only the strongest (earliest-detected) sub-peak gets a boom, not every one.
   const sfx = outputs.length > 0 ? boomCue(outputs[0]!, options) : []
-  return finish({ segments, freeze, overlays: [], sfx, zoom: burstZoomKeyframes(outputs, mainDuration), ending: { kind: 'cut' } })
-}
-
-function freezeLoopEdl(words: Word[], clipLength: number, peakSrcT: number, options: ViralEditOptions): Edl {
-  const { segments, freeze } = plainRecipe(words, clipLength, peakSrcT)
-  const peakOut = srcToOutput(segments, freeze, peakSrcT, true)
-  const mainDuration = concatDuration(segments)
-  return finish({ segments, freeze, overlays: [], sfx: boomCue(peakOut, options), zoom: snapZoomAtPeak(peakOut, mainDuration), ending: loopEndingFor(mainDuration) })
+  return finish({ segments, freeze, overlays: [], sfx, zoom: burstZoomKeyframes(outputs, mainDuration), ending: endingFor(options) })
 }
 
 /**
- * Builds the one house-look re-edit for an accepted clip. `decision` picks
- * the structure (`structurePick.ts`); `facts` is the same clip evidence
- * `computeSignals` (and so the decision) was built from. The result always
- * fits inside the original clip's length plus a short freeze or loop tail --
+ * The straight edit's result plus what the pacing pass did. `options.envelope`
+ * (VOD seconds) falls back to the job's per-second loudness in `facts`; the
+ * result always fits inside the original clip's length plus a short freeze --
  * every recipe only trims and reorders, it never stretches the clip out.
+ *
+ * `payoffFirst` (the peak is already in the first 15% of the clip, under 3 s of
+ * setup) is a tight cut: the clip already opens on its payoff, so replaying
+ * the payoff as a cold open would show the same words twice within a couple of
+ * seconds. The cold open proper is a separate version of a clip with a real
+ * setup, planned by `coldOpen.ts` and built by `coldOpenVariantEdl`.
  */
-export function buildViralEdl(decision: StructureDecision, facts: ClipFacts, options: ViralEditOptions = {}): Edl {
+export function buildViralEdit(decision: StructureDecision, facts: ClipFacts, options: ViralEditOptions = {}): { edl: Edl; stats: PacingStats } {
   const signals = computeSignals(facts)
   const clipLength = signals.clipLength
   const words = clipRelativeWords(facts)
   const peakSrcT = clamp(signals.setupLength, 0, clipLength)
+  const env = shiftEnvelope(options.envelope ?? envelopeFromLoudness(facts.loudness, facts.loudnessOffset), facts.window.start)
+  const local: ViralEditOptions = { ...options, envelope: env }
 
+  let edl: Edl
   switch (decision.structure) {
-    case 'payoffFirst':
-      return payoffFirstEdl(decision, words, clipLength, peakSrcT, options)
     case 'quoteCard':
-      return quoteCardEdl(decision, facts, words, clipLength, peakSrcT, options)
+      edl = quoteCardEdl(decision, facts, words, clipLength, peakSrcT, local)
+      break
     case 'buildAndPunch':
-      return buildAndPunchEdl(words, clipLength, peakSrcT, options)
+      edl = buildAndPunchEdl(words, clipLength, peakSrcT, local)
+      break
     case 'chatFirst':
-      return chatFirstEdl(decision, facts, words, clipLength, peakSrcT, options)
+      edl = chatFirstEdl(decision, facts, words, clipLength, peakSrcT, local)
+      break
     case 'rapidFire':
-      return rapidFireEdl(signals, words, clipLength, peakSrcT, options)
+      edl = rapidFireEdl(signals, words, clipLength, peakSrcT, local)
+      break
+    case 'payoffFirst':
     case 'freezeLoop':
-      return freezeLoopEdl(words, clipLength, peakSrcT, options)
     case 'tightCut':
     default:
-      return tightCutEdl(words, clipLength, peakSrcT, options)
+      edl = tightCutEdl(words, clipLength, peakSrcT, local)
+      break
+  }
+  // The same pass again, only for its numbers (cheap and deterministic).
+  const stats = trimSilences(words, clipLength, peakSrcT, pacingContext(local, decision.structure === 'rapidFire')).stats
+  return { edl, stats }
+}
+
+export function buildViralEdl(decision: StructureDecision, facts: ClipFacts, options: ViralEditOptions = {}): Edl {
+  return buildViralEdit(decision, facts, options).edl
+}
+
+/**
+ * The cold-open version of an already built straight edit: the plan's preview
+ * (payoff plus its reaction) in front, a whoosh on the join, and everything
+ * else -- segments, zoom, freezes, overlays, sound effects -- pushed later by
+ * the preview's length. The return is a hard cut back to the start of the
+ * straight edit. Always a plain cut ending: a loop needs the same first and
+ * last frame, and this version starts on the preview instead.
+ */
+export function coldOpenVariantEdl(straight: Edl, plan: ColdOpenPlan, options: ViralEditOptions = {}): Edl | null {
+  if (!plan.qualifies || plan.segments.length === 0) return null
+  const preview: EdlSegment = { srcStart: plan.segments[0]!.srcStart, srcEnd: plan.segments[0]!.srcEnd, speed: 1 }
+  const len = segmentDuration(preview)
+  return {
+    segments: [preview, ...straight.segments],
+    zoom: [{ t: 0, scale: 1, ease: 'snap' }, ...straight.zoom.map((z) => ({ ...z, t: z.t + len }))],
+    freeze: straight.freeze.map((f) => ({ ...f, atOutputT: f.atOutputT + len })),
+    overlays: straight.overlays.map((o) => ({ ...o, t0: o.t0 + len, t1: o.t1 + len })),
+    sfx: [...whooshCue(len, options), ...straight.sfx.map((s) => ({ ...s, t: s.t + len }))],
+    ending: { kind: 'cut' }
   }
 }

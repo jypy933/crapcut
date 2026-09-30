@@ -44,7 +44,10 @@ describe('applyClipPatch', () => {
     expect(apply({ start: 50 })).toMatchObject({ start: 80, end: 130 })
     expect(apply({ end: 400 })).toMatchObject({ start: 100, end: 150 })
     expect(apply({ start: 120, end: 110 })).toMatchObject({ start: 110, end: 120 })
-    expect(apply({ start: 129.5 })).toMatchObject({ start: 129.5, end: 132.5 })
+    // A trim never leaves less than the 10 s final-length floor.
+    expect(apply({ start: 129.5 })).toMatchObject({ start: 129.5, end: 139.5 })
+    expect(apply({ start: 145, end: 148 })).toMatchObject({ start: 140, end: 150 })
+    expect(apply({ end: 102 })).toMatchObject({ start: 100, end: 110 })
   })
 
   it('only accepts known layouts', () => {

@@ -222,7 +222,8 @@ cut. `core/structureSignals.ts` measures the clip's shape (where the reaction
 sits, a quotable line, chat vs. audio), `core/structurePick.ts` scores every
 structure against those signals and picks one, and `core/viralEdit.ts` turns
 the decision into an EDL (`core/edl.ts`): trimmed silences, a punch-in zoom,
-sound effects, and sometimes a cold open, a quote card or a loop ending.
+sound effects, and sometimes a quote card or a loop ending (a cold open is a
+separate, planned version, see the rule engine below).
 `core/edlFilter.ts` turns the EDL into an FFmpeg filter graph and
 `core/edlCaptions.ts` remaps the clip's own words onto it.
 
@@ -243,6 +244,47 @@ simply left off an auto-edited clip rather than shown at the wrong moment.
 "Best of" always uses the plain clips, never the automatic edit -- a per-clip
 loop ending or punch-in is built for a clip watched on its own and would fight
 the best-of's own crossfade join.
+
+#### Rule engine
+
+The starting rules from `docs/auto-edit-research.md` (section 4.7) are enforced
+by a pure rule engine, `core/editPlan.ts`, built on `core/viralEdit.ts` rather
+than beside it. Every threshold is a named constant in `EDIT_RULES`
+(`core/editRules.ts`); each check returns one result that is written as a
+single compact `rule <name> clip=<id> pass|fail|na ...` line to the local log
+and never shown in the UI. It runs twice: when moments are found
+(`pipeline/autoEditPlan.ts`, coarse per-second loudness, the language model
+confirming cold opens while it is still running) and whenever the edit is built
+for a preview or an export (`resolveAutoEdit`, with a 0.1 s loudness envelope
+and the loop seam frames measured from the downloaded clip with FFmpeg,
+`pipeline/seamMeasure.ts`). The result is stored on the clip as `editPlan`.
+
+- Length: the 10 s floor applies to the final edited length. When an edit would
+  end under it the edit is skipped (the whole cut is kept), then the cut is
+  grown from its download padding, and only then is the clip dropped. Caps
+  (TikTok 60 s, Shorts 60 s, Reels 90 s) are stored as a per-platform fit for
+  the later per-platform export; nothing is exported here.
+- Content floor: a chat peak inside and speech or loud frames over at least 40%
+  of the final edit (a strong loudness peak, the bar moment finding uses, stands in
+  for the chat peak). A clip failing it is dropped unless that would leave fewer
+  than three clips.
+- Hook and pacing: leading silence over 0.3 s is cut to 0.15 s; pauses over
+  0.5 s (0.7 s with loud game sound in them, measured on the fine envelope) are
+  cut to about 0.30 s, never inside a word or the sound of its tail; the
+  reaction beat after the payoff is kept and the edit ends about a second after
+  the reaction.
+- Cold open (`core/coldOpen.ts`): a plan only, stored for a second version.
+  Chat, loudness and the transcript must agree; the model confirms when it is
+  running, and without it the gate is stricter. `core/viralEdit.ts`
+  `coldOpenVariantEdl` builds the version from the plan. The `payoffFirst`
+  structure (payoff already in the first 15% or 3 s) is exactly the case a cold
+  open skips, so it is a plain tight cut and never replays its payoff.
+- Loop (`core/loopSeam.ts`): a property of a version. Eligible at 30 s or less
+  when the edit can end on the last word plus 150-400 ms of quiet and the first
+  and last frame look alike (frame threshold 0.55, not yet calibrated) with the
+  last 400 ms within 3 dB of the first. The video is a hard cut, the audio
+  fades over 60 ms at both ends; no end card. The structures that ask for a
+  loop (`freezeLoop`, a late `quoteCard`) only get one when this passes.
 
 Review shows a second, small tab next to the editor: a cached low-res preview
 of the clip's current auto edit, rendered in the background by

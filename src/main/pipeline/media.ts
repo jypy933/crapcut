@@ -120,7 +120,7 @@ export async function extractPcm(ffmpeg: string, file: string, start: number, du
   return stdout
 }
 
-function runToolBinary(file: string, args: string[], signal?: AbortSignal): Promise<{ stdout: Buffer }> {
+export function runToolBinary(file: string, args: string[], signal?: AbortSignal): Promise<{ stdout: Buffer }> {
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const chunks: Buffer[] = []

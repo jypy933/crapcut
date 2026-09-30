@@ -34,9 +34,9 @@ const ffmpeg = findOnPath(process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
 const ffprobe = findOnPath(process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe')
 const RESOURCES = resolve(__dirname, '../../../resources')
 
-const SOURCE_LEN = 16
-const CLIP_START = 2
-const CLIP_END = 12
+const SOURCE_LEN = 21
+const CLIP_START = 1
+const CLIP_END = 19
 
 async function makeSourceClip(file: string): Promise<void> {
   await runTool(ffmpeg!, [
@@ -61,15 +61,15 @@ async function makeSourceClip(file: string): Promise<void> {
 }
 
 function makeClip(id: string, jobId: string): Clip {
-  // Two short bursts of speech with a long, silent gap between them --
-  // trimSilences (inside buildViralEdl, every structure) should collapse
-  // that gap, so the auto-edited render comes out visibly shorter than the
-  // plain 10 s cut.
-  const burst = (start: number): { t0: number; t1: number; text: string }[] => [
-    { t0: start, t1: start + 0.3, text: 'okay' },
-    { t0: start + 0.35, t1: start + 0.65, text: 'watch' },
-    { t0: start + 0.7, t1: start + 1.0, text: 'this' }
-  ]
+  // Steady speech, then a long silent gap, then a short burst: trimSilences
+  // (inside buildViralEdl, every structure) should collapse that gap, and the
+  // edit still ends over the 10 s final-length floor, so the auto-edited
+  // render comes out visibly shorter than the plain 18 s cut.
+  const dense = (from: number, to: number): { t0: number; t1: number; text: string }[] => {
+    const out: { t0: number; t1: number; text: string }[] = []
+    for (let t = from; t < to; t += 0.4) out.push({ t0: t, t1: t + 0.3, text: `w${out.length}` })
+    return out
+  }
   return {
     id,
     jobId,
@@ -81,7 +81,7 @@ function makeClip(id: string, jobId: string): Clip {
     suggested: { start: CLIP_START, end: CLIP_END },
     source: { start: 0, end: SOURCE_LEN },
     status: 'accepted',
-    words: [...burst(CLIP_START + 0.2), ...burst(CLIP_END - 1.5)],
+    words: [...dense(CLIP_START + 0.2, CLIP_START + 8.2), ...dense(CLIP_END - 4.5, CLIP_END - 1.5)],
     captions: { enabled: true, y: 0.7, uppercase: true, styleId: 'clean' },
     chatMessages: [],
     chatOverlay: false,
@@ -127,10 +127,11 @@ describe.skipIf(!ffmpeg || !ffprobe)('auto-edit export wiring (real FFmpeg)', ()
         expect(out.width).toBe(1920)
         expect(out.height).toBe(1080)
         expect(out.hasAudio).toBe(true)
-        // The plain cut is 10 s; trimming the long silent gap between the two
-        // speech bursts should make the auto-edited render clearly shorter.
-        expect(out.duration).toBeLessThan(CLIP_END - CLIP_START - 1)
-        expect(out.duration).toBeGreaterThan(1)
+        // The plain cut is 18 s; trimming the long silent gap between the two
+        // speech stretches should make the auto-edited render clearly shorter,
+        // but not under the 10 s final-length floor.
+        expect(out.duration).toBeLessThan(CLIP_END - CLIP_START - 3)
+        expect(out.duration).toBeGreaterThan(10)
 
         // The house-look SFX got rendered once into the tools cache.
         expect(existsSync(join(dir, 'sfx', 'boom.wav'))).toBe(true)
@@ -140,7 +141,7 @@ describe.skipIf(!ffmpeg || !ffprobe)('auto-edit export wiring (real FFmpeg)', ()
         expect(clip.structureDecision).toBeNull()
 
         // Turning the automatic edit off falls back to the plain export,
-        // which keeps the full (minus final trim) 10 s cut.
+        // which keeps the full (minus final trim) 18 s cut.
         const plainOutput = join(dir, 'plain-out.mp4')
         await renderClipToFile(deps, { ...clip, autoEdit: false }, 'horizontal', join(dir, 'work-plain'), plainOutput, new AbortController().signal, () => {})
         const plain = await probeMedia(ffprobe!, plainOutput)

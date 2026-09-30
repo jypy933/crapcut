@@ -16,9 +16,14 @@ export interface WordSpan {
 export interface StructureDecision {
   structure: StructureId
   loopEnding: boolean
-  /** Word span for on-screen text shown during a cold open (payoffFirst). */
+  /** Word span around the payoff (payoffFirst). */
   hookSpan?: WordSpan
-  /** Source (VOD-second) range of the cold-open replay, 1-2 s around the peak (payoffFirst). */
+  /**
+   * Source (VOD-second) range around the peak (payoffFirst). Kept so clips saved
+   * before the rule engine still load; the edit no longer replays it -- a clip
+   * whose payoff is already at the top has nothing to cold-open. The real cold
+   * open is planned per clip in `ClipEditPlan.coldOpen`.
+   */
   coldOpenSpan?: { start: number; end: number }
   /** The verbatim line shown in the quote card's top bar (quoteCard). */
   quoteSpan?: WordSpan

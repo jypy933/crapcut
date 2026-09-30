@@ -11,7 +11,6 @@ import { buildChatOverlay, chatOverlayGeometry, chatPosition, DEFAULT_CHAT_OVERL
 import type { Clip, ExportFormat, HardwareProfile, Layout, Word } from '@shared/types'
 import { buildAss, defaultAssStyle, type AssStyle, type ChatOverlayAssInput } from '../core/ass'
 import { safeZone, fitCaptionStyle } from '@shared/captionSafeZone'
-import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
 import { outputDuration } from '../core/edl'
 import { remapWordsToEdl } from '../core/edlCaptions'
 import { buildEdlRenderArgs, buildOverlayAss, edlToFilterGraph, type EdlRenderSpec } from '../core/edlFilter'
@@ -28,7 +27,6 @@ import {
   type Size
 } from '../core/render'
 import { wordsIn } from '../core/transcript'
-import { buildViralEdl } from '../core/viralEdit'
 import { jobDir, type AppPaths } from '../paths'
 import type { Store } from '../store'
 import { runTool } from '../tools/process'
@@ -36,6 +34,7 @@ import type { ToolRegistry } from '../tools/registry'
 import { isCancelled, UserError } from '../util/errors'
 import { logger } from '../util/log'
 import type { GpuLock } from './gpuLock'
+import { resolveAutoEdit } from './autoEditPlan'
 import { probeMedia, type MediaInfo } from './media'
 import { ensureSfxCache } from './sfxCache'
 import { cachedLoudness, prepareStems, stemCacheKey, type StemCache } from './stems'
@@ -311,11 +310,16 @@ async function renderAutoEditToFile(
   signal: AbortSignal,
   onProgress: (f: number, etaSec: number | null) => void
 ): Promise<void> {
-  const { input, ffmpeg, media, start, end, seek, duration } = cut
-  const decision = clip.structureDecision ?? decideStructureHeuristically(clip)
-  const facts = { ...clipFacts(clip), window: { start, end } }
+  const { input, ffmpeg, media } = cut
   const sfx = await ensureSfxCache(ffmpeg, join(deps.paths.tools, 'sfx'))
-  const edl = buildViralEdl(decision, facts, { sfx })
+  // The rule engine's plan for this clip: the straight edit, and the cut grown
+  // from its padding when the edit would otherwise end up under the length floor.
+  const planned = await resolveAutoEdit(deps.store, { ffmpeg, input, clip, window: { start: cut.start, end: cut.end }, cam: layout.kind === 'cam_game' ? layout.cam : null, sfx, signal })
+  const { start, end } = planned.window
+  const edl = planned.edl
+  const seek = start - clip.source!.start
+  const duration = end - start
+  const audioCut: ClipCut = { ...cut, start, end, seek, duration, stemCache: { ...cut.stemCache, key: stemCacheKey(seek, duration, input) } }
 
   let captionsAssFile: string | null = null
   if (clip.captions.enabled) {
@@ -341,7 +345,7 @@ async function renderAutoEditToFile(
   // trims/reorders it -- the same approximation the plain path already makes
   // for a stems export (no measurement at all there), just one step short of
   // exact here since the EDL never invents sound, only rearranges what was measured.
-  const { audio, loudness } = await prepareClipAudio(deps, clip, cut, workDir, signal, (f) => onProgress(f * STEM_SHARE, null))
+  const { audio, loudness } = await prepareClipAudio(deps, clip, audioCut, workDir, signal, (f) => onProgress(f * STEM_SHARE, null))
   const stemShare = audio.kind === 'stems' ? STEM_SHARE : 0
 
   const filterScript = 'graph.txt'

@@ -3,9 +3,9 @@
 
 import type { ClipPatch } from '@shared/ipc'
 import type { Clip, Word } from '@shared/types'
+import { FINAL_FLOOR_SEC } from '@shared/editPlan'
 import { decideStructureHeuristically } from './core/clipFacts'
 
-export const EDIT_MIN_SEC = 3
 export const EDIT_MAX_SEC = 180
 
 export function applyClipPatch(clip: Clip, patch: ClipPatch, layoutExists: (id: string) => boolean, vodDuration: number): Clip {
@@ -35,8 +35,11 @@ export function applyClipPatch(clip: Clip, patch: ClipPatch, layoutExists: (id: 
     let start = patch.start ?? clip.start
     let end = patch.end ?? clip.end
     if (start > end) [start, end] = [end, start]
-    start = Math.max(bounds.start, Math.min(start, bounds.end - EDIT_MIN_SEC))
-    end = Math.min(bounds.end, Math.max(end, start + EDIT_MIN_SEC))
+    // A cut is never trimmed under the final-length floor: the edit's own
+    // trimming (pauses, lead-in) then has that much to work with, and the rule
+    // engine skips it or grows the cut from its padding if it still falls short.
+    start = Math.max(bounds.start, Math.min(start, bounds.end - FINAL_FLOOR_SEC))
+    end = Math.min(bounds.end, Math.max(end, start + FINAL_FLOOR_SEC))
     if (end - start > EDIT_MAX_SEC) {
       if (patch.start !== undefined && patch.end === undefined) end = start + EDIT_MAX_SEC
       else start = end - EDIT_MAX_SEC

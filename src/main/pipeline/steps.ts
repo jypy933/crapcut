@@ -34,6 +34,7 @@ import {
   type Refined
 } from '../core/llmPrompt'
 import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
+import { COLD_OPEN_SYSTEM_PROMPT } from '../core/coldOpenLlm'
 import { planLlmAttempts, startFirstWorking, type StartedLlm } from '../core/llmBackend'
 import { runPool } from '../core/pool'
 import { mergeRanges, parseLoudnessLog } from '../core/media'
@@ -54,6 +55,7 @@ import type { Logger } from '../util/log'
 import { downloadChat, dtwPreset, LlamaServer, whisperChunk, type WhisperChunkResult } from './ai'
 import type { GpuLock } from './gpuLock'
 import { cutAudioSegment, cutWav, extractPcm, fetchMutedRanges, prepareAudio, probeMedia, silentRanges } from './media'
+import { planMomentEdits } from './autoEditPlan'
 import { downloadAudio, downloadSection, fetchVodMeta } from './ytdlp'
 
 export interface StepContext {
@@ -514,13 +516,33 @@ async function moments(ctx: StepContext): Promise<void> {
     if (structureError) throw structureError
     clips.forEach((clip, i) => (clip.structureDecision = decisions.results[i] ?? null))
 
+    // The auto edit's rule engine: grows a cut that would end up under the
+    // 10 s floor from its padding, drops one that still falls short, and
+    // checks the content floor; each check goes to the log as one line. The
+    // same model, while it is still running, confirms cold-open plans; without
+    // it the stricter deterministic gate decides.
+    throwIfAborted(ctx.signal)
+    const planned = await planMomentEdits(clips, {
+      loudness,
+      durationSec: duration,
+      padSec: CLIP_PAD_SEC,
+      complete: llm
+        ? (prompt, schema) => llm.server.complete([{ role: 'system', content: COLD_OPEN_SYSTEM_PROMPT }, { role: 'user', content: prompt }], schema, ctx.signal)
+        : null,
+      concurrency: llm?.slots ?? 1,
+      minKeep: MIN_CLIPS,
+      signal: ctx.signal,
+      log: ctx.log
+    })
+    if (planned.dropped > 0) ctx.log.info(`dropped ${planned.dropped} clips under the length or content floor`)
+
     await writeJsonAtomic(join(ctx.dir, 'moments.json'), {
       candidates,
       refined,
       scanned: scanned.map((p) => ({ window: p.window, title: p.title, score: p.score })),
-      chosen: clips.map((c) => c.id)
+      chosen: planned.clips.map((c) => c.id)
     })
-    ctx.store.replaceClips(ctx.job.id, clips)
+    ctx.store.replaceClips(ctx.job.id, planned.clips)
   } finally {
     llm?.close()
   }

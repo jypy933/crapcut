@@ -63,9 +63,11 @@ export type Ending =
   | { kind: 'cut' }
   | {
       kind: 'loop'
-      /** Seconds replayed from the start of the output, appended at the end for a seamless loop. */
-      introSec: number
-      /** How much of that replay crossfades with the true ending, instead of ballooning the duration. */
+      /**
+       * The clip is built to replay: the video ends and starts with a hard cut
+       * (no end card, no appended intro), and the audio fades out and back in
+       * over this many seconds (30-100 ms) so the seam does not click.
+       */
       crossfadeSec: number
     }
 
@@ -85,7 +87,7 @@ export function segmentDuration(seg: EdlSegment): number {
   return Math.max(0, (seg.srcEnd - seg.srcStart) / seg.speed)
 }
 
-/** Concat-timeline start of each segment (before freezes or a loop ending are added). */
+/** Concat-timeline start of each segment (before freezes are added). */
 export function segmentStarts(segments: readonly EdlSegment[]): number[] {
   const starts: number[] = []
   let t = 0
@@ -96,7 +98,7 @@ export function segmentStarts(segments: readonly EdlSegment[]): number[] {
   return starts
 }
 
-/** Length of the joined segments, before freezes or a loop ending. */
+/** Length of the joined segments, before freezes. */
 export function concatDuration(segments: readonly EdlSegment[]): number {
   return segments.reduce((sum, s) => sum + segmentDuration(s), 0)
 }
@@ -106,14 +108,9 @@ export function freezeTotal(freeze: readonly FreezeCue[]): number {
   return freeze.reduce((sum, f) => sum + Math.max(0, f.holdSec), 0)
 }
 
-/** The extra length a loop ending adds: the replayed intro, minus the crossfade it shares with the true ending. */
-function loopExtra(ending: Ending): number {
-  return ending.kind === 'loop' ? Math.max(0, ending.introSec - ending.crossfadeSec) : 0
-}
-
 /** Total length of the final export. */
 export function outputDuration(edl: Edl): number {
-  return concatDuration(edl.segments) + freezeTotal(edl.freeze) + loopExtra(edl.ending)
+  return concatDuration(edl.segments) + freezeTotal(edl.freeze)
 }
 
 /**
@@ -144,6 +141,36 @@ export function mapSourceTimeToConcat(segments: readonly EdlSegment[], srcT: num
     }
   }
   return out
+}
+
+/** The nearest point in any segment's source range to `srcT` (for a time that fell in a trimmed gap). */
+function nearestSegmentClamp(segments: readonly EdlSegment[], srcT: number): number {
+  let best = segments[0]!.srcStart
+  let bestDist = Infinity
+  for (const s of segments) {
+    const c = Math.max(s.srcStart, Math.min(s.srcEnd, srcT))
+    const dist = Math.abs(c - srcT)
+    if (dist < bestDist) {
+      bestDist = dist
+      best = c
+    }
+  }
+  return best
+}
+
+/**
+ * Where a source-clip second lands on the final output timeline, after
+ * segment reordering/trimming and any freezes. `useLast` picks the later
+ * occurrence when a segment is reused (a cold open replays part of the
+ * clip): the real payoff, not the flashed-forward hook. A source time inside
+ * a trimmed-out gap is clamped to the nearest kept moment instead of being
+ * dropped, so a cue never silently disappears.
+ */
+export function sourceToOutputTime(segments: readonly EdlSegment[], freeze: readonly FreezeCue[], srcT: number, useLast: boolean): number {
+  if (segments.length === 0) return 0
+  const concatTimes = mapSourceTimeToConcat(segments, srcT)
+  const concatT = concatTimes.length > 0 ? concatTimes[useLast ? concatTimes.length - 1 : 0]! : (mapSourceTimeToConcat(segments, nearestSegmentClamp(segments, srcT))[0] ?? 0)
+  return concatToOutputTime(freeze, concatT)
 }
 
 export interface EdlValidationError {
@@ -188,8 +215,7 @@ export function validateEdl(edl: Edl, sourceDurationSec: number): EdlValidationE
   for (const s of edl.sfx) if (s.t < -EPS || s.t > outDur + EPS) errors.push({ message: 'an sfx cue falls outside the output' })
 
   if (edl.ending.kind === 'loop') {
-    if (!(edl.ending.introSec > 0)) errors.push({ message: 'a loop ending needs a positive intro length' })
-    if (!(edl.ending.crossfadeSec > 0) || edl.ending.crossfadeSec > edl.ending.introSec) errors.push({ message: 'a loop ending crossfade must fit inside its intro' })
+    if (!(edl.ending.crossfadeSec > 0) || edl.ending.crossfadeSec * 2 > outDur) errors.push({ message: 'a loop ending needs a positive crossfade that fits inside the clip' })
   }
 
   return errors
