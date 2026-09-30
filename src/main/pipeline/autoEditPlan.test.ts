@@ -107,6 +107,29 @@ describe('planMomentEdits', () => {
     expect(clips.map((c) => c.id)).toEqual(['good', 'loud'])
   })
 
+  it('keeps a chat-quiet transcript moment that has speech', async () => {
+    const said = clip('said', 700, 730, { chatMessages: [], signals: { chatZ: 0, audioZ: 0, score: 0.6, rating: null, source: 'transcript' } })
+    const quietChat = clip('said2', 800, 830, { chatMessages: [{ t: 805, user: 'a', text: 'hi' }], signals: { chatZ: 0, audioZ: 0, score: 0.6, rating: null, source: 'transcript' } })
+    const chatty = clip('chatty', 900, 930, { chatMessages: [{ t: 905, user: 'a', text: 'hi' }] })
+    const { clips } = await planMomentEdits([clip('good', 500, 540), said, quietChat, chatty], args({ minKeep: 1 }))
+    expect(clips.map((c) => c.id)).toEqual(['good', 'said', 'said2'])
+  })
+
+  it('never drops a clip he already decided on, and logs the failed check instead', async () => {
+    messages.length = 0
+    const dead = (id: string, start: number, status: Clip['status']): Clip => clip(id, start, start + 30, { status, chatMessages: [{ t: start + 5, user: 'a', text: 'hi' }] })
+    const tiny = clip('tiny-accepted', 0, 6, { status: 'accepted' })
+    const { clips, dropped } = await planMomentEdits(
+      [clip('good', 500, 540), dead('accepted-1', 600, 'accepted'), dead('rejected-1', 700, 'rejected'), dead('pending-1', 800, 'pending'), tiny],
+      args({ minKeep: 1, padSec: 0, log: LOG })
+    )
+    expect(clips.map((c) => c.id)).toEqual(['good', 'accepted-1', 'rejected-1', 'tiny-accepted'])
+    expect(clips.map((c) => c.rank)).toEqual([1, 2, 3, 4])
+    expect(dropped).toBe(1)
+    expect(messages.some((m) => m.includes('clip accepted:') && m.includes('content floor'))).toBe(true)
+    expect(messages.some((m) => m.includes('clip tiny-acc') && m.includes('length floor'))).toBe(true)
+  })
+
   it('logs each rule once per clip as one compact line', async () => {
     messages.length = 0
     await planMomentEdits([clip('abcdef123456', 500, 540)], args({ log: LOG }))

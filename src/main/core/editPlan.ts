@@ -64,6 +64,8 @@ export interface PlanInput {
   previous?: ClipEditPlan
   /** The clip was picked for a strong loudness peak (`isLoudPeak` on its stored audioZ): it passes the content floor without a chat peak. */
   loudPeak?: boolean
+  /** The clip was found from the transcript (`signals.source`): it has no chat peak by construction and passes that half of the content floor. */
+  transcriptMoment?: boolean
 }
 
 export interface PlanResult {
@@ -78,7 +80,7 @@ export interface PlanResult {
   checks: CheckResult[]
   /** Still under the floor after skipping the edit and growing the cut: the caller drops the clip where it can. */
   drop: boolean
-  /** The content floor held (chat peak inside, speech or loud frames over 40%). */
+  /** The content floor held (a peak inside: chat, loud or a transcript moment; speech or loud frames over 40%). */
   contentOk: boolean
   /** Where the seam should be measured when a loop is possible but no measurement was given yet; clip-relative seconds. */
   seamProbe: { window: Range; firstSec: number; lastSec: number; endSec: number } | null
@@ -145,7 +147,7 @@ export function planAutoEdit(input: PlanInput): PlanResult {
   const series = chatSeries({ ...facts, window }, Math.max(1, Math.ceil(clipLength)))
   const chatPeaks = facts.chatMessages.length === 0 ? null : countChatPeaks(series)
   const coverage = contentCoverage(final.edl.segments, words, envRel, { from: 0, to: clipLength })
-  const content = checkContent(chatPeaks, coverage, input.loudPeak === true)
+  const content = checkContent(chatPeaks, coverage, input.loudPeak === true, input.transcriptMoment === true)
 
   // Hook.
   const first = final.stats.firstEventSec

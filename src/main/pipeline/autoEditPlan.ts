@@ -71,7 +71,7 @@ export async function resolveAutoEdit(store: Store, args: ResolveArgs): Promise<
   }
 
   const decision = clip.structureDecision ?? decideStructureHeuristically(clip)
-  const base = { facts: { ...clipFacts(clip), window }, decision, bounds: source, options: { sfx: args.sfx }, envelope, previous: clip.editPlan, loudPeak: isLoudPeak(clip.signals?.audioZ) }
+  const base = { facts: { ...clipFacts(clip), window }, decision, bounds: source, options: { sfx: args.sfx }, envelope, previous: clip.editPlan, loudPeak: isLoudPeak(clip.signals?.audioZ), transcriptMoment: clip.signals?.source === 'transcript' }
   let result = planAutoEdit(base)
 
   if (result.seamProbe) {
@@ -118,7 +118,8 @@ export interface MomentPlanArgs {
  * cuts under the length floor are grown from their padding (after skipping
  * the edit, see `planAutoEdit`), clips that still fall short are dropped, and
  * clips failing the content floor are dropped too unless that would leave
- * fewer than `minKeep`. Returns the clips in their original order with their
+ * fewer than `minKeep`. A clip he already decided on (accepted or rejected) is
+ * never dropped: its failed check only goes to the log. Returns the clips in their original order with their
  * plan stored, re-ranked.
  */
 export async function planMomentEdits(clips: Clip[], args: MomentPlanArgs): Promise<{ clips: Clip[]; dropped: number }> {
@@ -127,7 +128,8 @@ export async function planMomentEdits(clips: Clip[], args: MomentPlanArgs): Prom
     facts: clipFacts(clip, loudness, 0),
     decision: clip.structureDecision ?? decideStructureHeuristically(clip),
     bounds: { start: Math.max(0, clip.start - padSec), end: Math.min(durationSec, clip.end + padSec) },
-    loudPeak: isLoudPeak(clip.signals?.audioZ)
+    loudPeak: isLoudPeak(clip.signals?.audioZ),
+    transcriptMoment: clip.signals?.source === 'transcript'
   })
 
   const pool = await runPool(
@@ -147,7 +149,9 @@ export async function planMomentEdits(clips: Clip[], args: MomentPlanArgs): Prom
     const r = pool.results[i]
     if (!r) return { clip, drop: false, contentOk: true }
     logChecks(log, clip, r)
-    return { clip: { ...clip, start: r.window.start, end: r.window.end, editPlan: r.plan }, drop: r.drop, contentOk: r.contentOk }
+    const decided = clip.status !== 'pending'
+    if (decided && (r.drop || !r.contentOk)) log.info(`clip ${tag(clip)}: kept although it fails the ${r.drop ? 'length' : 'content'} floor, since it was already ${clip.status}`)
+    return { clip: { ...clip, start: r.window.start, end: r.window.end, editPlan: r.plan }, drop: r.drop && !decided, contentOk: r.contentOk || decided }
   })
 
   const keep = planned.filter((p) => !p.drop && p.contentOk)

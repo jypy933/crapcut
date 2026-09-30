@@ -326,16 +326,18 @@ export function countChatPeaks(series: Float64Array | null): number {
 /**
  * A strong loudness peak (`loudPeak`, the bar moment finding uses) stands in for
  * the chat peak: loud moments were picked for a reason and are never dropped
- * for lacking chat or speech.
+ * for lacking chat or speech. A moment found from the transcript alone
+ * (`transcriptMoment`) has no chat peak by construction, so it satisfies that
+ * half too; the coverage half still applies to it.
  */
-export function checkContent(chatPeaks: number | null, coverage: number, loudPeak = false): CheckResult {
+export function checkContent(chatPeaks: number | null, coverage: number, loudPeak = false, transcriptMoment = false): CheckResult {
   const { minChatPeaks, minCoverage } = EDIT_RULES.content
   // With no chat replay at all the chat half cannot be judged; the coverage half still is.
-  const chatOk = chatPeaks === null || loudPeak || chatPeaks >= minChatPeaks
+  const chatOk = chatPeaks === null || loudPeak || transcriptMoment || chatPeaks >= minChatPeaks
   return {
     check: 'content',
     status: chatOk && coverage >= minCoverage ? 'pass' : 'fail',
-    values: { chatPeaks, loudPeak, coverage, minCoverage }
+    values: { chatPeaks, loudPeak, transcriptMoment, coverage, minCoverage }
   }
 }
 

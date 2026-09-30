@@ -167,6 +167,11 @@ describe('content floor', () => {
     expect(checkContent(0, 0.9, true)).toMatchObject({ status: 'pass', values: { loudPeak: true } })
     expect(checkContent(0, 0.2, true).status).toBe('fail')
   })
+
+  it('lets a transcript moment stand in for the chat peak, but still needs the coverage', () => {
+    expect(checkContent(0, 0.9, false, true)).toMatchObject({ status: 'pass', values: { transcriptMoment: true } })
+    expect(checkContent(0, 0.2, false, true).status).toBe('fail')
+  })
 })
 
 describe('hook checks', () => {

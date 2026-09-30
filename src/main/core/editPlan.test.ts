@@ -172,6 +172,19 @@ describe('planAutoEdit: the content floor', () => {
     expect(loud.checks.find((c) => c.check === 'content')!.values.loudPeak).toBe(true)
   })
 
+  it('keeps a chat-quiet transcript moment: it passes without a chat peak, but not with too little speech', () => {
+    const quietChat = healthy({ chatMessages: [{ t: 105, user: 'a', text: 'hi' }] })
+    expect(planAutoEdit(quietChat.input).contentOk).toBe(false)
+    const transcript = planAutoEdit({ ...quietChat.input, transcriptMoment: true })
+    expect(transcript.contentOk).toBe(true)
+    expect(transcript.checks.find((c) => c.check === 'content')!.values.transcriptMoment).toBe(true)
+
+    const facts: ClipFacts = { window: { start: 100, end: 130 }, words: [], chatMessages: [{ t: 105, user: 'a', text: 'hi' }], loudness: null, loudnessOffset: 0 }
+    const silent = env(100, 30, [], -100, -20, { from: 110, to: 116, db: -20 })
+    const sparse = planAutoEdit({ facts, decision: decisionFor(facts), bounds: { start: 100, end: 130 }, envelope: silent, transcriptMoment: true })
+    expect(sparse.contentOk).toBe(false)
+  })
+
   it('judges only the coverage when there is no chat replay at all', () => {
     const { input } = healthy({ chatMessages: [] })
     const r = planAutoEdit(input)
