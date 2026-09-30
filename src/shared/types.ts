@@ -1,8 +1,9 @@
 // Types shared by the main process and the renderer. Plain data only.
 
 import type { CaptionStyleId } from './captionStyles'
-import type { ClipEditPlan } from './editPlan'
+import type { ClipEditPlan, Platform } from './editPlan'
 import type { FormatPositions } from './overlayPosition'
+import type { ClipVersion } from './platformExport'
 import type { StructureDecision } from './structure'
 
 /** One transcribed word, times in seconds from the start of the VOD. */
@@ -10,6 +11,8 @@ export interface Word {
   t0: number
   t1: number
   text: string
+  /** Starts a fresh caption group. Only set on the output-timeline words of an edit, at a hard cut back to earlier footage (a cold open's return), never stored. */
+  newGroup?: boolean
 }
 
 /** One chat message, time in seconds from the start of the VOD. */
@@ -197,6 +200,12 @@ export interface Clip {
    * saved before it existed.
    */
   editPlan?: ClipEditPlan
+  /**
+   * Which version is previewed and exported: the straight edit (also when
+   * missing) or the cold open, which only exists when `editPlan.coldOpen`
+   * qualifies. See `shared/platformExport.ts`.
+   */
+  version?: ClipVersion
   /** Set when moments are found (and filled in on load for a clip saved before it existed). */
   virality?: ClipVirality
 }
@@ -221,11 +230,15 @@ export interface ExportItem {
   jobId: string
   clipId: string
   format: ExportFormat
+  /** The platform a vertical export is made for; null for 16:9 and for exports made before platforms existed. */
+  platform: Platform | null
   status: ExportStatus
   progress: number
   etaSec: number | null
   file: string | null
   error: string | null
+  /** One plain sentence when this export was left out or shortened (a platform's length cap), else null. */
+  note: string | null
   createdAt: number
 }
 

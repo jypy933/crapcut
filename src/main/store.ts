@@ -16,9 +16,10 @@ import {
   type StepState,
   type VodInfo
 } from '@shared/types'
+import { PLATFORMS } from '@shared/editPlan'
 import type { TasteDecision } from './core/taste'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 /** Exported so tests can build a real "database from an older version" without duplicating the SQL. */
 export const MIGRATIONS: Record<number, string> = {
@@ -81,10 +82,15 @@ export const MIGRATIONS: Record<number, string> = {
       error TEXT,
       created_at INTEGER NOT NULL
     );
+  `,
+  // Per-platform exports: which platform a vertical export is for, and a plain note when it was shortened or left out.
+  3: `
+    ALTER TABLE exports ADD COLUMN platform TEXT;
+    ALTER TABLE exports ADD COLUMN note TEXT;
   `
 }
 
-const EXPORT_COLUMNS = new Set(['status', 'progress', 'file', 'error'])
+const EXPORT_COLUMNS = new Set(['status', 'progress', 'file', 'error', 'note'])
 const BEST_OF_COLUMNS = new Set(['status', 'progress', 'file', 'error'])
 
 /** One review decision kept for taste learning, stored in the `kv` table. */
@@ -304,9 +310,9 @@ export class Store {
 
   // ---- exports ----
 
-  addExport(jobId: string, clipId: string, format: ExportItem['format']): string {
+  addExport(jobId: string, clipId: string, format: ExportItem['format'], platform: ExportItem['platform'] = null): string {
     const id = randomUUID()
-    this.db.prepare('INSERT INTO exports (id, job_id, clip_id, format, status, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, jobId, clipId, format, 'queued', Date.now())
+    this.db.prepare('INSERT INTO exports (id, job_id, clip_id, format, platform, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, jobId, clipId, format, platform, 'queued', Date.now())
     return id
   }
 
@@ -315,22 +321,37 @@ export class Store {
       jobId
         ? this.db.prepare('SELECT * FROM exports WHERE job_id = ? ORDER BY created_at').all(jobId)
         : this.db.prepare('SELECT * FROM exports ORDER BY created_at').all()
-    ) as { id: string; job_id: string; clip_id: string; format: string; status: string; progress: number; file: string | null; error: string | null; created_at: number }[]
+    ) as {
+      id: string
+      job_id: string
+      clip_id: string
+      format: string
+      platform: string | null
+      status: string
+      progress: number
+      file: string | null
+      error: string | null
+      note: string | null
+      created_at: number
+    }[]
     return rows.map((r) => ({
       id: r.id,
       jobId: r.job_id,
       clipId: r.clip_id,
       format: r.format as ExportItem['format'],
+      // Exports made before platforms existed have none.
+      platform: PLATFORMS.find((p) => p === r.platform) ?? null,
       status: r.status as ExportItem['status'],
       progress: r.progress,
       etaSec: null,
       file: r.file,
       error: r.error,
+      note: r.note,
       createdAt: r.created_at
     }))
   }
 
-  updateExport(id: string, patch: Partial<Pick<ExportItem, 'status' | 'progress' | 'file' | 'error'>>): void {
+  updateExport(id: string, patch: Partial<Pick<ExportItem, 'status' | 'progress' | 'file' | 'error' | 'note'>>): void {
     const sets: string[] = []
     const vals: (string | number | null)[] = []
     for (const [k, v] of Object.entries(patch)) {

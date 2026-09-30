@@ -29,6 +29,11 @@ export function applyClipPatch(clip: Clip, patch: ClipPatch, layoutExists: (id: 
     next.wordsEdited = true
   }
   if (patch.autoEdit !== undefined) next.autoEdit = patch.autoEdit
+  // Straight is the default and is stored as no field, like a clip from before versions existed.
+  if (patch.version !== undefined) {
+    if (patch.version === 'straight') delete next.version
+    else next.version = patch.version
+  }
 
   if (patch.start !== undefined || patch.end !== undefined) {
     const bounds = clip.source ?? { start: 0, end: vodDuration }

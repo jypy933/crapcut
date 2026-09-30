@@ -935,6 +935,10 @@ kbd {
   gap: 12px;
   align-items: center;
 }
+/* The one plain sentence under an export that was shortened or left out. */
+.export-note {
+  margin-top: -3px;
+}
 
 /* ---------- layout editor ---------- */
 

@@ -105,6 +105,17 @@ describe('Store', () => {
     expect(store.exports(id)[0]).toMatchObject({ status: 'queued', progress: 0 })
   })
 
+  it('keeps the platform and the note of an export', () => {
+    const id = store.createJob('u', '9')
+    const tiktok = store.addExport(id, 'c1', 'vertical', 'tiktok')
+    const wide = store.addExport(id, 'c1', 'horizontal')
+    store.updateExport(tiktok, { status: 'done', progress: 1, file: null, note: 'Not made for TikTok: the clip is over 60 s.' })
+    expect(store.exports(id)).toMatchObject([
+      { id: tiktok, format: 'vertical', platform: 'tiktok', status: 'done', file: null, note: 'Not made for TikTok: the clip is over 60 s.' },
+      { id: wide, format: 'horizontal', platform: null, note: null }
+    ])
+  })
+
   it('tracks best-of builds and requeues interrupted ones', () => {
     const id = store.createJob('u', '7')
     const other = store.createJob('u', '8')
@@ -159,7 +170,7 @@ describe('Store', () => {
 })
 
 describe('schema migration', () => {
-  it('migrates a real v1 database (with existing rows) to v2 without losing data', () => {
+  it('migrates a real v1 database (with existing rows) to the latest version without losing data', () => {
     // Build the database exactly as the shipped v0.1.2 app would have left
     // it: only migration 1 applied, user_version = 1, real rows in it.
     const file = join(dir, 'v1.db')
@@ -181,7 +192,8 @@ describe('schema migration', () => {
       expect(migrated.job('job1')).toMatchObject({ id: 'job1', status: 'review' })
       expect(migrated.clips('job1')).toHaveLength(1)
       expect(migrated.clip('c1')).toMatchObject({ id: 'c1', status: 'accepted' })
-      expect(migrated.exports('job1')).toMatchObject([{ id: 'exp1', status: 'done' }])
+      // An export from before platforms existed has none and no note.
+      expect(migrated.exports('job1')).toMatchObject([{ id: 'exp1', status: 'done', platform: null, note: null }])
       expect(migrated.get<{ encoder: string }>('encoder')).toEqual({ encoder: 'libx264' })
 
       // The new table from migration 2 exists and works.
@@ -189,7 +201,7 @@ describe('schema migration', () => {
       expect(migrated.bestOfList('job1')).toMatchObject([{ id: b, status: 'queued' }])
 
       const version = (migrated.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-      expect(version).toBe(2)
+      expect(version).toBe(3)
     } finally {
       migrated.close()
     }

@@ -5,6 +5,8 @@ import { z } from 'zod'
 import type { AppInfo, AutoEditPreviewState, AutostartStatus, BestOfItem, ChannelWatchStatus, Clip, ExportItem, JobSummary, Layout, SetupStatus, UpdateState } from './types'
 import { AUDIO_MODES } from './types'
 import { CAPTION_STYLE_IDS } from './captionStyles'
+import { PLATFORMS, type Platform } from './editPlan'
+import { CLIP_VERSIONS } from './platformExport'
 import { EVENT_CHANNELS, type INVOKE_CHANNELS } from './channels'
 
 export { EVENT_CHANNELS }
@@ -47,7 +49,8 @@ export const ClipPatchSchema = z
     audio: z.enum(AUDIO_MODES),
     layoutId: id.nullable(),
     formats: z.object({ vertical: z.boolean(), horizontal: z.boolean() }).strict(),
-    autoEdit: z.boolean()
+    autoEdit: z.boolean(),
+    version: z.enum(CLIP_VERSIONS)
   })
   .partial()
   .strict()
@@ -105,6 +108,8 @@ export const Invoke = {
   'channelWatch:clear': z.tuple([]),
   'settings:getAutostart': z.tuple([]),
   'settings:setAutostart': z.tuple([z.boolean()]),
+  'settings:getExportPlatforms': z.tuple([]),
+  'settings:setExportPlatforms': z.tuple([z.array(z.enum(PLATFORMS)).min(1).max(PLATFORMS.length)]),
   'models:download': z.tuple([optionalModelId]),
   'models:remove': z.tuple([optionalModelId])
 } as const
@@ -159,6 +164,9 @@ export interface InvokeResult {
   'channelWatch:clear': void
   'settings:getAutostart': AutostartStatus
   'settings:setAutostart': AutostartStatus
+  /** The platforms vertical clips are exported for (remembered; all three by default). */
+  'settings:getExportPlatforms': Platform[]
+  'settings:setExportPlatforms': Platform[]
   'models:download': void
   'models:remove': void
 }

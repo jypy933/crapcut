@@ -36,6 +36,11 @@ describe('groupWords', () => {
     expect(g!.start).toBe(1)
   })
 
+  it('starts a new group at a word marked as one, however close it is', () => {
+    const groups = groupWords([w(1, 1.3, 'one'), w(1.35, 1.6, 'two'), { ...w(1.65, 1.9, 'three'), newGroup: true }, w(1.95, 2.2, 'four')])
+    expect(groups.map((g) => g.words.map((x) => x.text))).toEqual([['one', 'two'], ['three', 'four']])
+  })
+
   it('gives words stamped at the same instant a moment each', () => {
     const groups = groupWords([w(5, 5, 'why'), w(5, 5, 'is'), w(5, 5.3, 'it'), w(5.02, 5.4, 'always'), w(5.4, 5.8, 'late')])
     const starts = groups.flatMap((g) => g.words.map((x) => x.t0))

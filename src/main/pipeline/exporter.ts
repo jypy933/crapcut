@@ -3,6 +3,8 @@
 
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Platform } from '@shared/editPlan'
+import { normalizePlatforms, PLATFORM_LABELS, type ClipVersion } from '@shared/platformExport'
 import type { Clip, ExportFormat, ExportItem, HardwareProfile } from '@shared/types'
 import { jobDir, type AppPaths } from '../paths'
 import type { Store } from '../store'
@@ -34,10 +36,14 @@ export function safeFileName(s: string, max = 80): string {
   return /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(name) ? `${name}_` : name
 }
 
-export function exportFileName(clip: Clip, format: ExportFormat): string {
-  const tag = format === 'vertical' ? '9x16' : '16x9'
-  return `${String(clip.rank).padStart(2, '0')} ${safeFileName(clip.title, 60)} (${tag}).mp4`
+/** `01 Title (TikTok).mp4`; 16:9 says `16x9`, an old export without a platform `9x16`, and the cold-open version says so, so both versions can sit side by side. */
+export function exportFileName(clip: Clip, format: ExportFormat, platform: Platform | null = null, version: ClipVersion = 'straight'): string {
+  const tag = format === 'horizontal' ? '16x9' : platform ? PLATFORM_LABELS[platform] : '9x16'
+  const cold = version === 'coldOpen' ? ' cold open' : ''
+  return `${String(clip.rank).padStart(2, '0')} ${safeFileName(clip.title, 60)} (${tag}${cold}).mp4`
 }
+
+const EXPORT_PLATFORMS_KEY = 'exportPlatforms'
 
 export interface ExporterEvents {
   onChanged: (item: ExportItem) => void
@@ -79,17 +85,29 @@ export class Exporter {
     if (item) this.events.onChanged(item)
   }
 
-  /** Queues exports for the given clips in each format they have ticked. */
+  /** The platforms vertical exports are made for: remembered, all three until he unticks one. */
+  platforms(): Platform[] {
+    return normalizePlatforms(this.store.get<unknown>(EXPORT_PLATFORMS_KEY))
+  }
+
+  setPlatforms(platforms: readonly Platform[]): Platform[] {
+    const kept = normalizePlatforms(platforms)
+    this.store.set(EXPORT_PLATFORMS_KEY, kept)
+    return kept
+  }
+
+  /** Queues exports for the given clips: one per remembered platform for vertical, one for 16:9. */
   add(jobId: string, clipIds: string[]): string[] {
     const ids: string[] = []
+    const platforms = this.platforms()
     for (const clipId of clipIds) {
       const clip = this.store.clip(clipId)
       if (!clip || clip.jobId !== jobId) continue
-      const formats: ExportFormat[] = []
-      if (clip.formats.vertical) formats.push('vertical')
-      if (clip.formats.horizontal) formats.push('horizontal')
-      for (const f of formats) {
-        const id = this.store.addExport(jobId, clipId, f)
+      const targets: { format: ExportFormat; platform: Platform | null }[] = []
+      if (clip.formats.vertical) for (const platform of platforms) targets.push({ format: 'vertical', platform })
+      if (clip.formats.horizontal) targets.push({ format: 'horizontal', platform: null })
+      for (const t of targets) {
+        const id = this.store.addExport(jobId, clipId, t.format, t.platform)
         ids.push(id)
         this.queue.push(id)
         this.emit(id, true)
@@ -154,13 +172,13 @@ export class Exporter {
     let release: (() => void) | null = null
     try {
       release = await this.encodeLock.acquire(signal)
-      this.store.updateExport(id, { status: 'running', progress: 0, error: null })
+      this.store.updateExport(id, { status: 'running', progress: 0, error: null, note: null })
       this.emit(id, true)
-      const file = await this.render(item, signal, (f, eta) => {
+      const { file, note } = await this.render(item, signal, (f, eta) => {
         this.progress.set(id, { progress: f, etaSec: eta })
         this.emit(id)
       })
-      this.store.updateExport(id, { status: 'done', progress: 1, file })
+      this.store.updateExport(id, { status: 'done', progress: 1, file, note })
     } catch (err) {
       if (isCancelled(err)) {
         this.store.updateExport(id, { status: this.shuttingDown ? 'queued' : 'cancelled', progress: 0 })
@@ -224,7 +242,15 @@ export class Exporter {
     return prepareClipForBestOf(this.deps(), clip, workDir, signal, onProgress)
   }
 
-  private async render(item: ExportItem, signal: AbortSignal, onProgress: (f: number, eta: number | null) => void): Promise<string> {
+  /** Files already made for a clip in this go, by render signature: a platform whose file would come out the same copies one of them instead of encoding again. */
+  private made = new Map<string, Map<string, string>>()
+
+  /**
+   * Renders one export item. The file is null (and the note says why) when the
+   * platform was skipped for this clip; the note is also set when the clip was
+   * cut at a phrase end to fit the platform's cap.
+   */
+  private async render(item: ExportItem, signal: AbortSignal, onProgress: (f: number, eta: number | null) => void): Promise<{ file: string | null; note: string | null }> {
     const found = this.store.clip(item.clipId)
     if (!found) throw new UserError('That clip no longer exists.', { retryable: false })
     const clip = await ensureClipNormalized(this.store, this.paths, found)
@@ -234,17 +260,34 @@ export class Exporter {
     const work = join(dir, 'render', item.id)
     const outDir = join(this.paths.output, safeFileName(`${meta.vod.channel} - ${meta.vod.title}`, 90))
     mkdirSync(outDir, { recursive: true })
-    const final = join(outDir, exportFileName(clip, item.format))
     const partial = join(work, 'out.mp4')
 
-    await renderClipToFile(this.deps(), clip, item.format, work, partial, signal, onProgress)
-    // Size, bars, sound, watermark and caption checks; may swap in a blur-fill re-render, throws only for a really broken clip.
-    await verifyExport(this.deps(), clip, item.format, work, partial, signal)
+    const files = this.made.get(clip.id) ?? new Map<string, string>()
+    this.made.set(clip.id, files)
+    try {
+      const outcome = await renderClipToFile(this.deps(), clip, item.format, work, partial, signal, onProgress, {
+        platform: item.platform,
+        reuse: (signature) => files.get(signature) ?? null
+      })
+      if (outcome.kind === 'skipped') {
+        rmSync(work, { recursive: true, force: true })
+        log.info(`${item.platform ?? item.format} clip ${clip.rank}: left out`)
+        return { file: null, note: outcome.note }
+      }
+      // Size, bars, sound, watermark and caption checks; may swap in a blur-fill re-render, throws only for a really broken clip.
+      // A copy of a file that already passed them needs none.
+      if (outcome.kind === 'rendered') await verifyExport(this.deps(), clip, item.format, item.platform, outcome.finalSec, work, partial, signal)
 
-    rmSync(final, { force: true })
-    moveFile(partial, final)
-    rmSync(work, { recursive: true, force: true })
-    log.info(`exported ${item.format} clip ${clip.rank}`)
-    return final
+      const final = join(outDir, exportFileName(clip, item.format, item.platform, outcome.version))
+      rmSync(final, { force: true })
+      moveFile(partial, final)
+      rmSync(work, { recursive: true, force: true })
+      files.set(outcome.signature, final)
+      log.info(`exported ${item.platform ?? item.format} clip ${clip.rank}${outcome.kind === 'copied' ? ' (same as an earlier platform, copied)' : ''}`)
+      return { file: final, note: outcome.note }
+    } finally {
+      // Nothing more queued for this clip: forget its files.
+      if (!this.queue.some((id) => this.store.exports().find((e) => e.id === id)?.clipId === clip.id)) this.made.delete(clip.id)
+    }
   }
 }

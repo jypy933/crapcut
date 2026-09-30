@@ -67,6 +67,15 @@ describe('remapWordsToEdl', () => {
     expect(out[1]!.t0).toBeCloseTo(1 + 10.2, 5)
   })
 
+  it('marks the first word after a hard cut back to earlier footage as a fresh caption group, and no other', () => {
+    const words = [w(0.2, 0.5, 'start'), w(0.6, 0.9, 'again'), w(9.4, 9.7, 'a'), w(10.2, 10.6, 'clutch')]
+    const out = remapWordsToEdl(words, baseEdl({ segments: [seg(9, 11), seg(0, 20)] }))
+    expect(out.filter((o) => o.newGroup).map((o) => [o.text, o.t0])).toEqual([['start', 2.2]])
+    // A forward cut (a trimmed pause) keeps its group.
+    const trimmed = remapWordsToEdl([w(0.2, 0.5, 'one'), w(6.2, 6.5, 'two')], baseEdl({ segments: [seg(0, 1), seg(6, 8)] }))
+    expect(trimmed.some((o) => o.newGroup)).toBe(false)
+  })
+
   it('drops a sliver of a word too short to keep', () => {
     const words = [w(4.999, 5.0005, 'sliver')]
     const out = remapWordsToEdl(words, baseEdl({ segments: [seg(0, 5)] }))

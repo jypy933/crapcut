@@ -3,6 +3,7 @@
 
 import { dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { existsSync } from 'node:fs'
+import type { Platform } from '@shared/editPlan'
 import { Invoke, type InvokeChannel, type InvokeResult } from '@shared/ipc'
 import type { Events, EventChannel } from '@shared/ipc'
 import { optionalModelArtifactIds, type OptionalModelId } from '@shared/optionalModels'
@@ -136,6 +137,8 @@ export function registerIpc(services: AppServices, getWindow: () => BrowserWindo
 
     'settings:getAutostart': () => autostart.status(),
     'settings:setAutostart': (enabled: boolean) => autostart.setEnabled(enabled),
+    'settings:getExportPlatforms': () => exporter.platforms(),
+    'settings:setExportPlatforms': (platforms: Platform[]) => exporter.setPlatforms(platforms),
 
     'models:download': (id: OptionalModelId) => {
       void setup.start(optionalModelArtifactIds(id, hardware) as ToolId[])

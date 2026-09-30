@@ -16,6 +16,7 @@ import { captionStyle } from '@shared/captionStyles'
 import { buildAss, defaultAssStyle } from '../core/ass'
 import { buildEdlRenderArgs, buildOverlayAss, edlToFilterGraph, type EdlRenderSpec } from '../core/edlFilter'
 import { remapWordsToEdl } from '../core/edlCaptions'
+import { pickVersion } from '../core/platformPlan'
 import { wordsIn } from '../core/transcript'
 import { jobDir, type AppPaths } from '../paths'
 import type { Store } from '../store'
@@ -106,7 +107,9 @@ export class AutoEditPreviewService {
         signal
       })
       const { start, end } = planned.window
-      const edl = planned.edl
+      // The version the clip is set to, the same pick an export makes (a
+      // platform's length cap can still shorten an export; a preview shows the whole version).
+      const { edl } = pickVersion(planned, clip.version)
 
       const dir = previewDir(this.paths, clip.jobId)
       mkdirSync(dir, { recursive: true })

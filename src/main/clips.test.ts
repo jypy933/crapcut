@@ -66,6 +66,18 @@ describe('applyClipPatch', () => {
     expect(apply({ autoEdit: false }).autoEdit).toBe(false)
   })
 
+  it('switches the version, storing the straight edit as no field', () => {
+    const cold = apply({ version: 'coldOpen' })
+    expect(cold.version).toBe('coldOpen')
+    const back = applyClipPatch(cold, ClipPatchSchema.parse({ version: 'straight' }), () => true, 5000)
+    expect('version' in back).toBe(false)
+    // Other edits leave it alone, and a clip without one still loads.
+    expect(clip.version).toBeUndefined()
+    expect(applyClipPatch(cold, ClipPatchSchema.parse({ title: 'Renamed' }), () => true, 5000).version).toBe('coldOpen')
+    // Only the two versions are accepted.
+    expect(() => ClipPatchSchema.parse({ version: 'loop' })).toThrow()
+  })
+
   it('recomputes the structure decision on a trim, without touching it otherwise', () => {
     expect(apply({ title: 'Renamed' }).structureDecision).toBe(clip.structureDecision)
     const trimmed = apply({ start: 105 })

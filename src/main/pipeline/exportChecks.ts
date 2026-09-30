@@ -6,6 +6,7 @@
 
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Platform } from '@shared/editPlan'
 import type { Clip, ExportFormat } from '@shared/types'
 import { safeZone } from '@shared/captionSafeZone'
 import {
@@ -95,7 +96,16 @@ function readAss(workDir: string): string | null {
 }
 
 /** Measures the export and judges it against what the clip was meant to be. */
-async function reportFor(deps: ClipRenderDeps, clip: Clip, format: ExportFormat, workDir: string, file: string, signal: AbortSignal): Promise<ExportReport> {
+async function reportFor(
+  deps: ClipRenderDeps,
+  clip: Clip,
+  format: ExportFormat,
+  platform: Platform | null,
+  plannedSec: number,
+  workDir: string,
+  file: string,
+  signal: AbortSignal
+): Promise<ExportReport> {
   const ffmpeg = deps.tools.require('ffmpeg')
   const ffprobe = ffprobeFor(ffmpeg)
   const layoutIsBlur = format === 'vertical' && layoutFor(deps, clip).kind === 'blur_fill'
@@ -116,9 +126,9 @@ async function reportFor(deps: ClipRenderDeps, clip: Clip, format: ExportFormat,
     format,
     sourceHadAudio: sourceInfo.hasAudio,
     sourceSilent,
-    plannedMaxSec: Math.max(0, end - start),
+    plannedMaxSec: Math.max(0, end - start, plannedSec),
     ass: readAss(workDir),
-    zone: safeZone(format),
+    zone: safeZone(format, platform ?? undefined),
     layoutIsBlur
   })
 }
@@ -133,19 +143,24 @@ function logReport(id: string, report: ExportReport): void {
  * Checks the export at `partial` (just rendered from `clip`), fixes what can be
  * fixed silently and throws a plain `UserError` only for a clip that is really
  * broken. A measuring problem never fails an export: it is logged and skipped.
+ * `platform` picks the safe zone the captions are judged against; `plannedSec`
+ * is how long the render said the file would be (a cold open runs longer than
+ * the cut it is made from).
  */
 export async function verifyExport(
   deps: ClipRenderDeps,
   clip: Clip,
   format: ExportFormat,
+  platform: Platform | null,
+  plannedSec: number,
   workDir: string,
   partial: string,
   signal: AbortSignal
 ): Promise<void> {
-  const id = `${format} clip ${clip.rank}`
+  const id = `${platform ?? format} clip ${clip.rank}`
   let report: ExportReport
   try {
-    report = await reportFor(deps, clip, format, workDir, partial, signal)
+    report = await reportFor(deps, clip, format, platform, plannedSec, workDir, partial, signal)
   } catch (err) {
     if (isCancelled(err)) throw err
     log.warn(`${id}: could not run the export checks`, err)
@@ -160,8 +175,8 @@ export async function verifyExport(
     const fixed = join(fixDir, 'out.mp4')
     const plain: Clip = { ...clip, layoutId: null }
     try {
-      await renderClipToFile(deps, plain, format, fixDir, fixed, signal, () => {})
-      const again = await reportFor(deps, plain, format, fixDir, fixed, signal)
+      await renderClipToFile(deps, plain, format, fixDir, fixed, signal, () => {}, { platform })
+      const again = await reportFor(deps, plain, format, platform, plannedSec, fixDir, fixed, signal)
       logReport(`${id} (blur fill)`, again)
       if (!again.broken && !again.checks.some((c) => c.id === 'bars' && !c.ok)) {
         moveFile(fixed, partial)

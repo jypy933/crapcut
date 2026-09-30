@@ -1,9 +1,11 @@
 import { ArrowLeft, Check, Clapperboard, Crop, FolderOpen, Music, Pause, Play, RotateCcw, Smartphone, Monitor, Sparkles, Wand2, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { editGroupText } from '@shared/captionEdit'
 import { clipWords, groupWords, type CaptionGroup } from '@shared/captions'
 import { CAPTION_STYLES } from '@shared/captionStyles'
+import { PLATFORMS, type Platform } from '@shared/editPlan'
 import { formatClock, formatEta, formatLength } from '@shared/format'
+import { chosenVersion, hasColdOpen, PLATFORM_LABELS, platformsOverCap, type ClipVersion } from '@shared/platformExport'
 import type { RenderFormat } from '@shared/layoutGeometry'
 import { AUDIO_MODE_LABELS, type AppInfo, type AudioMode, type AutoEditPreviewState, type BestOfItem, type Clip, type ExportItem, type Layout, type Range } from '@shared/types'
 import type { ClipPatch } from '@shared/ipc'
@@ -37,6 +39,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
   const [tuned, setTuned] = useState(false)
   const [stageTab, setStageTab] = useState<'editor' | 'autoEdit'>('editor')
   const [previews, setPreviews] = useState<Record<string, AutoEditPreviewState>>({})
+  const [platforms, setPlatforms] = useState<Platform[]>([...PLATFORMS])
   const video = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
@@ -52,6 +55,7 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
     void call('bestOf:list', jobId).then(setBestOf)
     void call('app:info').then(setInfo)
     void call('taste:status').then((s) => setTuned(s.tuned))
+    void call('settings:getExportPlatforms').then(setPlatforms)
   }, [jobId])
 
   useEvent('exports:changed', (item) => {
@@ -78,6 +82,17 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
 
   useEvent('autoEditPreview:changed', (state) => {
     setPreviews((m) => ({ ...m, [state.clipId]: state }))
+    // Building a preview refreshes the clip's edit plan (a trim can add or remove its cold open); take the new plan, nothing else.
+    if (state.status === 'ready') {
+      void call('clips:list', jobId).then((fresh) =>
+        setClips((list) =>
+          list?.map((c) => {
+            const f = fresh.find((x) => x.id === c.id)
+            return !f || JSON.stringify(f.editPlan) === JSON.stringify(c.editPlan) ? c : { ...c, editPlan: f.editPlan }
+          }) ?? null
+        )
+      )
+    }
   })
 
   const clip = clips?.find((c) => c.id === selected) ?? null
@@ -166,6 +181,15 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
   }
 
   const kept = clips?.filter((c) => c.status === 'accepted') ?? []
+  const keptVertical = kept.some((c) => c.formats.vertical)
+
+  // At least one platform stays ticked; the choice is remembered for next time.
+  function togglePlatform(p: Platform): void {
+    const next = platforms.includes(p) ? platforms.filter((x) => x !== p) : PLATFORMS.filter((x) => x === p || platforms.includes(x))
+    if (next.length === 0) return
+    setPlatforms(next)
+    void call('settings:setExportPlatforms', next).then(setPlatforms)
+  }
   const jobExports = exports.filter((e) => e.status !== 'cancelled')
   const activeBestOf = bestOf.find((b) => b.status === 'running' || b.status === 'queued') ?? null
   const lastBestOf = [...bestOf].reverse().find((b) => b.status !== 'cancelled') ?? null
@@ -216,6 +240,18 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
           ))}
         </div>
         <div className="foot col">
+          {keptVertical && (
+            <div className="col" style={{ gap: 4 }}>
+              <span className="small faint">Post vertical clips to</span>
+              <div className="segmented" role="group" aria-label="Post vertical clips to">
+                {PLATFORMS.map((p) => (
+                  <button key={p} type="button" aria-pressed={platforms.includes(p)} className={platforms.includes(p) ? 'on' : ''} onClick={() => togglePlatform(p)}>
+                    {PLATFORM_LABELS[p]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <button
             type="button"
             className="btn primary"
@@ -315,7 +351,12 @@ export function Review({ jobId, go }: { jobId: string; go: (r: Route) => void })
           defaultLayoutId={defaultLayoutId}
           time={time}
           voiceAvailable={info?.features.voiceSeparation ?? false}
-          onUpdate={(p) => void update(clip.id, p)}
+          platforms={platforms}
+          onUpdate={(p) => {
+            // Picking a version shows it: the Auto edit tab plays the chosen one.
+            if (p.version) setStageTab('autoEdit')
+            void update(clip.id, p)
+          }}
           onSeek={seek}
           onEditLayout={() => {
             video.current?.pause()
@@ -378,6 +419,7 @@ function Inspector({
   defaultLayoutId,
   time,
   voiceAvailable,
+  platforms,
   onUpdate,
   onSeek,
   onEditLayout,
@@ -389,6 +431,7 @@ function Inspector({
   defaultLayoutId: string | null
   time: number
   voiceAvailable: boolean
+  platforms: Platform[]
   onUpdate: (p: ClipPatch) => void
   onSeek: (t: number) => void
   onEditLayout: () => void
@@ -406,6 +449,7 @@ function Inspector({
   // A clip saved before the chat overlay existed has neither field yet (main
   // normalises on read, but this stays cheap insurance).
   const chatMessages = clip.chatMessages ?? []
+  const overCap = platformsOverCap(clip, platforms)
 
   return (
     <aside className="inspector">
@@ -430,7 +474,17 @@ function Inspector({
       />
 
       <Field label="Auto edit" right={<Toggle on={clip.autoEdit} label="Auto edit" onChange={(autoEdit) => onUpdate({ autoEdit })} />}>
-        {null}
+        {/* The one calm choice between the two versions; there is nothing to choose without a cold open. */}
+        {hasColdOpen(clip) && (
+          <Segmented<ClipVersion>
+            value={chosenVersion(clip)}
+            onChange={(version) => onUpdate({ version })}
+            options={[
+              { value: 'straight', label: 'Straight' },
+              { value: 'coldOpen', label: 'Cold open', title: 'Starts on the big moment, then goes back to the beginning' }
+            ]}
+          />
+        )}
       </Field>
 
       <Field label="Formats">
@@ -444,6 +498,9 @@ function Inspector({
             16:9
           </label>
         </div>
+        {clip.formats.vertical && overCap.length > 0 && (
+          <div className="small faint">{overCap.map((p) => PLATFORM_LABELS[p]).join(' and ')}: over the length limit, so it ends early or is left out.</div>
+        )}
       </Field>
 
       <Field
@@ -640,26 +697,33 @@ function ExportsBar({ items, clips }: { items: ExportItem[]; clips: Clip[] }): R
       {items.map((e) => {
         const c = clips.find((x) => x.id === e.clipId)
         const eta = formatEta(e.etaSec)
+        // A platform left out for this clip has no file; its note says why.
+        const left = e.status === 'done' && !e.file && !!e.note
         return (
-          <div key={e.id} className="export-row small">
-            <span className="ellipsis">
-              {c?.title ?? 'Clip'} <span className="faint">· {e.format === 'vertical' ? '9:16' : '16:9'}</span>
-            </span>
-            {e.status === 'running' ? <ProgressBar value={e.progress} /> : <span className={e.status === 'failed' ? 'error' : 'faint'}>{e.status === 'failed' ? (e.error ?? 'Failed') : e.status === 'done' ? 'Done' : e.status === 'queued' ? 'Waiting' : ''}</span>}
-            <span style={{ textAlign: 'right' }}>
-              {e.status === 'done' ? (
-                <button type="button" className="btn sm ghost" onClick={() => void call('exports:show', e.id)}>
-                  Show
-                </button>
-              ) : e.status === 'running' ? (
-                <span className="faint">{eta ?? `${Math.round(e.progress * 100)}%`}</span>
-              ) : e.status === 'queued' ? (
-                <button type="button" className="btn sm ghost" onClick={() => void call('exports:cancel', e.id)}>
-                  Cancel
-                </button>
-              ) : null}
-            </span>
-          </div>
+          <Fragment key={e.id}>
+            <div className="export-row small">
+              {/* The title shortens, the platform after it never does. */}
+              <span className="row" style={{ minWidth: 0, gap: 4 }}>
+                <span className="ellipsis">{c?.title ?? 'Clip'}</span>
+                <span className="faint" style={{ flex: 'none' }}>· {e.platform ? PLATFORM_LABELS[e.platform] : e.format === 'vertical' ? '9:16' : '16:9'}</span>
+              </span>
+              {e.status === 'running' ? <ProgressBar value={e.progress} /> : <span className={e.status === 'failed' ? 'error' : 'faint'}>{e.status === 'failed' ? (e.error ?? 'Failed') : left ? 'Left out' : e.status === 'done' ? 'Done' : e.status === 'queued' ? 'Waiting' : ''}</span>}
+              <span style={{ textAlign: 'right' }}>
+                {e.status === 'done' && e.file ? (
+                  <button type="button" className="btn sm ghost" onClick={() => void call('exports:show', e.id)}>
+                    Show
+                  </button>
+                ) : e.status === 'running' ? (
+                  <span className="faint">{eta ?? `${Math.round(e.progress * 100)}%`}</span>
+                ) : e.status === 'queued' ? (
+                  <button type="button" className="btn sm ghost" onClick={() => void call('exports:cancel', e.id)}>
+                    Cancel
+                  </button>
+                ) : null}
+              </span>
+            </div>
+            {e.status === 'done' && e.note && <div className="small faint export-note">{e.note}</div>}
+          </Fragment>
         )
       })}
     </div>

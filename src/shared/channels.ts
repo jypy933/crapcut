@@ -41,6 +41,8 @@ export const INVOKE_CHANNELS = [
   'channelWatch:clear',
   'settings:getAutostart',
   'settings:setAutostart',
+  'settings:getExportPlatforms',
+  'settings:setExportPlatforms',
   'models:download',
   'models:remove'
 ] as const

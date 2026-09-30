@@ -7,7 +7,7 @@ const job = (status: JobSummary['status'], steps: Partial<Record<StepId, StepSta
   status,
   steps: Object.fromEntries(STEP_IDS.map((s) => [s, steps[s] ?? step('pending')])) as Record<StepId, StepState>
 })
-const exp = (status: ExportItem['status'], progress: number): ExportItem => ({ id: 'e', jobId: 'j', clipId: 'c', format: 'vertical', status, progress, etaSec: null, file: null, error: null, createdAt: 1000 })
+const exp = (status: ExportItem['status'], progress: number): ExportItem => ({ id: 'e', jobId: 'j', clipId: 'c', format: 'vertical', platform: null, status, progress, etaSec: null, file: null, error: null, note: null, createdAt: 1000 })
 const build = (status: BestOfItem['status'], progress: number): BestOfItem => ({ id: 'b', jobId: 'j', status, progress, etaSec: null, file: null, error: null, createdAt: 1000 })
 
 describe('taskbarState', () => {

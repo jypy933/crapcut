@@ -47,7 +47,7 @@ export function groupWords(words: Word[], opts: GroupOptions = DEFAULT_GROUPING)
     const prev = current[current.length - 1]
     const gap = prev ? w.t0 - prev.t1 : 0
     const addChars = (current.length ? 1 : 0) + text.length
-    if (current.length >= opts.maxWords || (current.length > 0 && chars + addChars > opts.maxChars) || gap > opts.maxGap) flush()
+    if (current.length >= opts.maxWords || (current.length > 0 && chars + addChars > opts.maxChars) || gap > opts.maxGap || w.newGroup) flush()
     current.push({ ...w, text })
     chars += (current.length > 1 ? 1 : 0) + text.length
     if (/[.!?…]$/.test(text)) flush()

@@ -35,7 +35,7 @@ const clip = (jobId: string): Clip => ({
   audio: 'original',
   musicPath: null,
   layoutId: null,
-  formats: { vertical: true, horizontal: false },
+  formats: { vertical: false, horizontal: true },
   reason: 'Chat spike',
   signals: null,
   structureDecision: null,
@@ -78,7 +78,7 @@ describe('shared encode lock', () => {
 
     // Replace the real (I/O-heavy) work with fakes that just record overlap;
     // the lock itself is the thing under test here, not FFmpeg or captions.
-    ;(exporter as unknown as { render: (item: ExportItem) => Promise<string> }).render = () => busy('export')
+    ;(exporter as unknown as { render: (item: ExportItem) => Promise<{ file: string | null; note: string | null }> }).render = async () => ({ file: await busy('export'), note: null })
     ;(bestOf as unknown as { build: (jobId: string) => Promise<string> }).build = () => busy('bestof')
 
     const jobId = store.createJob('u', '1')

@@ -4,6 +4,8 @@
 import { parseChannelName } from '@shared/channelName'
 import type { CrapcutApi, EventChannel, Events, InvokeChannel } from '@shared/ipc'
 import { optionalModelArtifactIds, type OptionalModelId } from '@shared/optionalModels'
+import type { ClipEditPlan, Platform } from '@shared/editPlan'
+import { normalizePlatforms, PLATFORM_LABELS } from '@shared/platformExport'
 import type { AppInfo, AutostartStatus, BestOfItem, ChannelWatchStatus, ChatMessage, Clip, ExportItem, HardwareProfile, JobSummary, Layout, SetupComponent, SetupStatus, StepId, StepState, Word } from '@shared/types'
 
 const listeners = new Map<string, Set<(p: unknown) => void>>()
@@ -192,6 +194,36 @@ function fakeChat(start: number, end: number): ChatMessage[] {
   return out
 }
 
+const capFits = (finalSec: number): ClipEditPlan['capFit'] => ({
+  tiktok: { capSec: 60, fits: finalSec <= 60 },
+  shorts: { capSec: 60, fits: finalSec <= 60 },
+  reels: { capSec: 90, fits: finalSec <= 90 }
+})
+
+/** A stored edit plan like the rule engine's: `coldOpen` gives it a qualifying cold-open version, `finalSec` sets the straight length. */
+function mockPlan(finalSec: number, coldOpen: boolean): ClipEditPlan {
+  const previewSec = coldOpen ? 2.6 : 0
+  return {
+    finalSec,
+    editSkipped: false,
+    extendedSec: 0,
+    belowFloor: false,
+    capFit: capFits(finalSec),
+    coldOpen: {
+      qualifies: coldOpen,
+      confidence: coldOpen ? 0.78 : 0.2,
+      llm: 'unavailable',
+      payoffVodSec: null,
+      previewSec,
+      finalSec: coldOpen ? finalSec + previewSec : 0,
+      segments: [],
+      capFit: capFits(coldOpen ? finalSec + previewSec : 0),
+      reasons: []
+    },
+    loop: { eligible: false, endSec: null, seamScore: null, loudnessDiffLu: null, quietSec: null, calibrated: false }
+  }
+}
+
 const titles = ['He did NOT see that coming', 'Chat lost it at this', 'The cleanest clutch ever', 'Wait for the ending...', 'Worst luck of the stream', "This is why we don't trust him"]
 let clips: Clip[] = titles.map((title, i) => {
   const start = 1000 + i * 1500
@@ -219,7 +251,9 @@ let clips: Clip[] = titles.map((title, i) => {
     structureDecision: null,
     autoEdit: true,
     // The first two are the job's clearly strong moments: pre-selected, best first.
-    virality: { score: Math.round((0.86 - i * 0.09) * 1000) / 1000, topPick: i < 2 }
+    virality: { score: Math.round((0.86 - i * 0.09) * 1000) / 1000, topPick: i < 2 },
+    // The first clip has a cold open to choose; the second is a long one that runs over the TikTok and Shorts limit; the rest have no cold open.
+    ...(i === 0 ? { editPlan: mockPlan(26, true) } : i === 1 ? { editPlan: mockPlan(71, false) } : {})
   }
 })
 // Dev-only regression fixture for the Timeline trim bar: word marks whose
@@ -277,7 +311,7 @@ let bestOf: BestOfItem[] = []
 // lines, the title-bar pill and the "time left" hiding can be seen moving.
 if (params.get('work') === '1') {
   const now = Date.now()
-  const item = (n: number, status: ExportItem['status'], progress: number, etaSec: number | null): ExportItem => ({ id: `exp-seed000${n}`, jobId: 'job-aaaaaa01', clipId: `clip-bbbbbb0${n}`, format: 'vertical', status, progress, etaSec, file: null, error: null, createdAt: now })
+  const item = (n: number, status: ExportItem['status'], progress: number, etaSec: number | null): ExportItem => ({ id: `exp-seed000${n}`, jobId: 'job-aaaaaa01', clipId: `clip-bbbbbb0${n}`, format: 'vertical', platform: null, status, progress, etaSec, file: null, error: null, note: null, createdAt: now })
   exports = [item(0, 'done', 1, null), item(1, 'running', 0.45, 75), item(2, 'queued', 0, null), item(3, 'queued', 0, null)]
   bestOf = [{ id: 'bestof-seed0001', jobId: 'job-aaaaaa01', status: 'running', progress: 0.3, etaSec: 40, file: null, error: null, createdAt: now }]
 }
@@ -316,6 +350,7 @@ setInterval(() => {
 }, 1000)
 let channelWatch: ChannelWatchStatus = { channel: null, enabledAt: null, checking: false, lastCheckedAt: null, lastError: null }
 let autostart: AutostartStatus = { enabled: false, userSet: false }
+let exportPlatforms: Platform[] = normalizePlatforms(null)
 
 const info: AppInfo = {
   version: '0.1.0',
@@ -344,6 +379,8 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
     clips = clips.map((c) => {
       if (c.id !== id) return c
       const next = { ...c, ...patch }
+      // Straight is stored as no field, like the real store.
+      if (patch.version === 'straight') delete next.version
       // Like the real store: an empty chat position is "back to the default".
       if (patch.chatPos && Object.keys(patch.chatPos).length === 0) delete next.chatPos
       return next
@@ -383,7 +420,29 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
   'exports:list': (jobId: string) => exports.filter((e) => e.jobId === jobId),
   'work:list': () => ({ exports, bestOf }),
   'exports:start': (jobId: string, ids: string[]) => {
-    exports = ids.map((clipId, i) => ({ id: `exp-cccccc0${i}`, jobId, clipId, format: 'vertical', status: i ? 'queued' : 'running', progress: 0.35, etaSec: 40, file: null, error: null, createdAt: Date.now() }))
+    // One vertical export per ticked platform, like the real exporter; the long clip is left out where it is over the limit.
+    let n = 0
+    exports = ids.flatMap((clipId) =>
+      exportPlatforms.map((platform): ExportItem => {
+        const long = clips.find((c) => c.id === clipId)?.editPlan?.capFit[platform].fits === false
+        const item: ExportItem = {
+          id: `exp-cccccc0${n}`,
+          jobId,
+          clipId,
+          format: 'vertical',
+          platform,
+          status: long ? 'done' : n ? 'queued' : 'running',
+          progress: long ? 1 : 0.35,
+          etaSec: long ? null : 40,
+          file: null,
+          error: null,
+          note: long ? `Not made for ${PLATFORM_LABELS[platform]}: the clip is over 60 s.` : null,
+          createdAt: Date.now()
+        }
+        n++
+        return item
+      })
+    )
     for (const e of exports) emit('exports:changed', e)
     return exports.map((e) => e.id)
   },
@@ -424,6 +483,11 @@ const handlers: Partial<Record<InvokeChannel, (...a: never[]) => unknown>> = {
   'settings:setAutostart': (enabled: boolean) => {
     autostart = { enabled, userSet: true }
     return autostart
+  },
+  'settings:getExportPlatforms': () => exportPlatforms,
+  'settings:setExportPlatforms': (platforms: Platform[]) => {
+    exportPlatforms = normalizePlatforms(platforms)
+    return exportPlatforms
   },
   'models:download': (id: OptionalModelId) => simulateModelDownload(optionalModelArtifactIds(id, hardware)),
   'models:remove': (id: OptionalModelId) => {

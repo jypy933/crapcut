@@ -262,8 +262,8 @@ and the loop seam frames measured from the downloaded clip with FFmpeg,
 - Length: the 10 s floor applies to the final edited length. When an edit would
   end under it the edit is skipped (the whole cut is kept), then the cut is
   grown from its download padding, and only then is the clip dropped. Caps
-  (TikTok 60 s, Shorts 60 s, Reels 90 s) are stored as a per-platform fit for
-  the later per-platform export; nothing is exported here.
+  (TikTok 60 s, Shorts 60 s, Reels 90 s) are stored as a per-platform fit and
+  enforced by the per-platform export (see below).
 - Content floor: a chat peak inside and speech or loud frames over at least 40%
   of the final edit (a strong loudness peak, the bar moment finding uses, stands in
   for the chat peak). A clip failing it is dropped unless that would leave fewer
@@ -273,7 +273,7 @@ and the loop seam frames measured from the downloaded clip with FFmpeg,
   cut to about 0.30 s, never inside a word or the sound of its tail; the
   reaction beat after the payoff is kept and the edit ends about a second after
   the reaction.
-- Cold open (`core/coldOpen.ts`): a plan only, stored for a second version.
+- Cold open (`core/coldOpen.ts`): a plan, stored for a second version of the clip.
   Chat, loudness and the transcript must agree; the model confirms when it is
   running, and without it the gate is stricter. `core/viralEdit.ts`
   `coldOpenVariantEdl` builds the version from the plan. The `payoffFirst`
@@ -285,6 +285,37 @@ and the loop seam frames measured from the downloaded clip with FFmpeg,
   last 400 ms within 3 dB of the first. The video is a hard cut, the audio
   fades over 60 ms at both ends; no end card. The structures that ask for a
   loop (`freezeLoop`, a late `quoteCard`) only get one when this passes.
+
+#### Versions and platforms
+
+A clip has at most two versions: the straight edit and, when its plan
+qualifies, the cold open. Review shows one calm two-way switch (Straight / Cold
+open) under the Auto edit toggle, hidden when there is no cold open; the choice
+is `Clip.version` (missing means straight, and a cold open that no longer
+qualifies after a trim falls back to straight). Looping is a property of a
+version, never a third one: only the straight version can loop, and only when
+its seam passed (`pickVersion` in `core/platformPlan.ts`, used by the preview
+and the export alike, so the Auto edit tab plays what would be exported).
+
+Vertical clips are exported once per platform (TikTok, Shorts, Reels); the
+ticked platforms are one remembered setting (`settings:getExportPlatforms`,
+all three by default) shown as three small buttons above the Export button.
+16:9 stays one file. `planPlatform` (`core/platformPlan.ts`, pure) holds the
+chosen version to the platform's cap: within it, nothing changes; over it, the
+edit is cut at the last phrase end (a pause of 0.25 s or a full stop) just under
+the cap, but only when that loses at most 8 s and keeps the payoff and its
+reaction beat; otherwise the platform is skipped for that clip and the export
+row says so in one sentence (an export with no file and a note). A cut edit
+ends in a plain cut, so a loop is never played from a shortened version. The
+captions are fitted to that platform's safe zone (`fitCaptionStyle`), the
+hook and chat overlays are clamped into it (Reels' zone sits inside the 3:4
+grid crop, so frame 0 stays in the cover), and the export check judges the file
+against the same zone. Two platforms whose files would come out the same (same
+edit and the same fitted caption and overlay text, `outputSignature`) encode
+once: the later one copies the earlier file. File names say the platform, and
+`cold open` for that version (`01 Title (Reels cold open).mp4`), so both versions
+can sit side by side. Old exports and clips without these fields load with the
+defaults.
 
 Review shows a second, small tab next to the editor: a cached low-res preview
 of the clip's current auto edit, rendered in the background by
@@ -332,9 +363,9 @@ shares the exporter's encode lock.
 Captions are fitted before encoding: `fitCaptionStyle` (`core/captionSafeZone.ts`)
 estimates the caption block from its text and style and, when it would leave
 the platform safe zone (research table 2.5), moves it up or down and, if a line
-is too wide, wraps it earlier (`AssStyle.marginX`). Until exports are made per
-platform the vertical zone is `DEFAULT_PLATFORM` (TikTok); 16:9 keeps a 5%
-title-safe margin. After the encode `pipeline/exportChecks.ts` measures the file
+is too wide, wraps it earlier (`AssStyle.marginX`). A vertical export uses its
+platform's zone (`DEFAULT_PLATFORM`, TikTok, only when no platform is given);
+16:9 keeps a 5% title-safe margin. After the encode `pipeline/exportChecks.ts` measures the file
 with the pinned ffprobe/FFmpeg (size, streams, `volumedetect`, `cropdetect` on
 three spots) and `core/exportChecks.ts` judges it: 1080x1920 (1920x1080), no
 black bars, audible sound, nothing added to the picture or the end, captions in

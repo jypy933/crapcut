@@ -27,6 +27,8 @@ export function remapWordsToEdl(words: Word[], edl: Edl): Word[] {
 
   edl.segments.forEach((seg, i) => {
     const concatStart = starts[i]!
+    // A hard cut back to earlier footage (a cold open's return to the start) begins a fresh caption group: a group must never join the preview's last words to the replay's first.
+    let returns = i > 0 && seg.srcStart < edl.segments[i - 1]!.srcStart
     for (const w of repaired) {
       if (w.t1 <= seg.srcStart || w.t0 >= seg.srcEnd) continue
       const clippedStart = Math.max(w.t0, seg.srcStart)
@@ -37,8 +39,10 @@ export function remapWordsToEdl(words: Word[], edl: Edl): Word[] {
       out.push({
         t0: concatToOutputTime(edl.freeze, concatT0),
         t1: concatToOutputTime(edl.freeze, concatT1),
-        text: w.text
+        text: w.text,
+        ...(returns ? { newGroup: true } : {})
       })
+      returns = false
     }
   })
 
