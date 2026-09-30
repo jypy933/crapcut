@@ -94,12 +94,17 @@ export const EDIT_RULES = {
     quietTargetSec: 0.25,
     /** Whisper's word ends sit about this early (docs/auto-edit-research.md). */
     wordEndEarlySec: 0.1,
-    /** Uncalibrated: no real clip has been measured against it yet. */
-    minFrameSimilarity: 0.55,
-    /** A mean grey-level difference of this many levels (of 255) scores a frame similarity of 0. */
+    /**
+     * Calibrated on 80 real seams (docs/auto-edit-research.md, section 7): the correlation of the first and last
+     * picture of the area the layout shows of the person (the facecam; the whole frame without one). Seams that
+     * looked alike by eye scored 0.70-1.00 (median 0.94), seams with a visible jump -0.02-0.87 (median 0.38).
+     */
+    minFrameSimilarity: 0.9,
+    /** Two flat (single-tone) pictures cannot be correlated; a mean grey-level difference of this many levels (of 255) then scores 0. */
     frameDiffFullScale: 64,
-    maxLoudnessDiffLu: 3,
-    loudnessWindowSec: 0.4,
+    /** The speech level (median dB over the words) of the first and last `speechWindowSec` of a loop may differ by this much. */
+    maxLoudnessDiffLu: 6,
+    speechWindowSec: 2,
     crossfadeMinSec: 0.03,
     crossfadeMaxSec: 0.1,
     crossfadeSec: 0.06

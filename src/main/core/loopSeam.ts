@@ -1,14 +1,14 @@
 // Whether a clip can end as a seamless loop, and how good the seam is. A loop
 // is a property of a version: it needs the final length to be 30 s or less, an
 // end on the last word plus a short quiet, a first frame that looks like the
-// last one, and a last 400 ms about as loud as the first. The video is a hard
-// cut and the audio is faded over 30-100 ms (see `Ending` in `edl.ts`); there
-// is no end card. Pure: the frames and loudness are measured elsewhere
-// (`pipeline/seamMeasure.ts`, FFmpeg at edit time) and scored here.
-// The frame threshold is a starting value nobody has calibrated on real clips.
+// last one, and speech at the end about as loud as speech at the start. The
+// video is a hard cut and the audio is faded over 30-100 ms (see `Ending` in
+// `edl.ts`); there is no end card. Pure: the frames and loudness are measured
+// elsewhere (`pipeline/seamMeasure.ts`, FFmpeg at edit time) and scored here.
+// Both thresholds were set on 80 real seams (docs/auto-edit-research.md, section 7).
 
 import type { Rect, Word } from '@shared/types'
-import { dbAt, EDIT_RULES, speechFloorDb, type CheckResult, type Envelope } from './editRules'
+import { dbAt, EDIT_RULES, median, speechFloorDb, type CheckResult, type Envelope } from './editRules'
 import { concatDuration, type EdlSegment } from './edl'
 
 export interface LoopCandidate {
@@ -17,6 +17,8 @@ export interface LoopCandidate {
   quietSec: number
   /** The quiet was read from a fine envelope; otherwise it is the target, not a measurement. */
   quietMeasured: boolean
+  /** Where the last word's sound ends (clip-relative), just before the deliberate quiet. */
+  speechEndSec: number
   /** Length of the looped edit. */
   finalSec: number
 }
@@ -64,14 +66,14 @@ export function planLoopEnd(inputs: LoopCandidateInputs): { candidate: LoopCandi
   const finalSec = concatDuration(segments) + (endSec - lastSeg.srcEnd)
   if (finalSec > c.maxFinalSec + 1e-6) return { candidate: null, reason: `${finalSec.toFixed(1)}s is over ${c.maxFinalSec}s` }
   if (finalSec < EDIT_RULES.length.finalFloorSec - 1e-6) return { candidate: null, reason: `${finalSec.toFixed(1)}s is under the ${EDIT_RULES.length.finalFloorSec}s floor` }
-  return { candidate: { endSec, quietSec: used, quietMeasured: measured, finalSec }, reason: null }
+  return { candidate: { endSec, quietSec: used, quietMeasured: measured, speechEndSec: Math.min(trueEnd, endSec), finalSec }, reason: null }
 }
 
 // --- the seam itself --------------------------------------------------------
 
 /** Size of the grey thumbnails the frames are compared at: the whole frame, and the facecam (square) when there is one. */
-export const SEAM_FRAME = { width: 32, height: 18 } as const
-export const SEAM_CAM_FRAME = { width: 32, height: 32 } as const
+export const SEAM_FRAME = { width: 64, height: 36 } as const
+export const SEAM_CAM_FRAME = { width: 64, height: 64 } as const
 
 /**
  * FFmpeg arguments (an argument array, never a shell) that write one frame at
@@ -85,38 +87,71 @@ export function buildFrameGrabArgs(input: string, atSec: number, cam: Rect | nul
 }
 
 export interface SeamMeasure {
-  /** 0..1, how alike the first and last frame are. */
+  /** 0..1, how alike the first and last picture are (correlation; see `frameSimilarity`). */
   frameSimilarity: number
-  /** Absolute dB difference between the first and last 400 ms (an RMS stand-in for LU). */
+  /** Absolute dB difference between the speech level at the start and at the end. */
   loudnessDiffLu: number
 }
 
-/** 0..1 from two equally sized grey frames: 1 for identical, 0 at a mean difference of `frameDiffFullScale` grey levels or more. */
+const mean = (a: ArrayLike<number>, n: number): number => {
+  let s = 0
+  for (let i = 0; i < n; i++) s += a[i]!
+  return s / n
+}
+
+/**
+ * 0..1 from two equally sized grey pictures: their correlation (so a change of
+ * brightness alone does not count, only a change of what is where), 0 for
+ * anti-correlated ones. Two flat pictures have nothing to correlate and are
+ * compared by tone instead: 1 for the same grey, 0 at a difference of
+ * `frameDiffFullScale` levels or more.
+ */
 export function frameSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
   const n = Math.min(a.length, b.length)
   if (n === 0) return 0
-  let sum = 0
-  for (let i = 0; i < n; i++) sum += Math.abs(a[i]! - b[i]!)
-  return Math.max(0, Math.min(1, 1 - sum / n / EDIT_RULES.loop.frameDiffFullScale))
-}
-
-/** Mean level (power mean, dB) of the envelope over [from, from + windowSec), or null with no coverage. */
-export function windowLevelDb(env: Envelope, from: number, windowSec = EDIT_RULES.loop.loudnessWindowSec): number | null {
-  let power = 0
-  let n = 0
-  for (let t = from; t < from + windowSec - 1e-9; t += env.stepSec) {
-    const db = dbAt(env, t)
-    if (db === null) continue
-    power += Math.pow(10, db / 10)
-    n++
+  const ma = mean(a, n)
+  const mb = mean(b, n)
+  let sab = 0
+  let saa = 0
+  let sbb = 0
+  for (let i = 0; i < n; i++) {
+    const x = a[i]! - ma
+    const y = b[i]! - mb
+    sab += x * y
+    saa += x * x
+    sbb += y * y
   }
-  return n === 0 ? null : 10 * Math.log10(power / n)
+  const flat = 1e-6 * n
+  if (saa < flat || sbb < flat) {
+    if (saa < flat && sbb < flat) return Math.max(0, Math.min(1, 1 - Math.abs(ma - mb) / EDIT_RULES.loop.frameDiffFullScale))
+    return 0
+  }
+  return Math.max(0, Math.min(1, sab / Math.sqrt(saa * sbb)))
 }
 
-/** |start level - end level| across the seam, or null when either end is not covered. Times clip-relative. */
-export function seamLoudnessDiff(env: Envelope, startSec: number, endSec: number): number | null {
-  const a = windowLevelDb(env, startSec)
-  const b = windowLevelDb(env, endSec - EDIT_RULES.loop.loudnessWindowSec)
+/** Median dB of the frames the given words cover; null with no words or no coverage. */
+export function speechLevelDb(env: Envelope, words: readonly Word[]): number | null {
+  const levels: number[] = []
+  for (const w of words) for (let t = w.t0; t < w.t1 - 1e-9; t += env.stepSec) {
+    const db = dbAt(env, t)
+    if (db !== null && db > -60) levels.push(db)
+  }
+  return median(levels)
+}
+
+/**
+ * |speech level at the start - speech level at the end| across the seam: the
+ * median dB of the words in the first `speechWindowSec` from `startSec` (where
+ * the first word starts) against the words in the last `speechWindowSec` up
+ * to `endSec` (where the last word ends, before the quiet the loop ends on).
+ * Words, not a fixed 0.4 s of audio: a window that catches a gap or the quiet
+ * tail reads as a big step from speech to silence. Null when either side has
+ * no measurable words. Times clip-relative, `env` clip-relative too.
+ */
+export function speechLevelDiff(env: Envelope, words: readonly Word[], startSec: number, endSec: number): number | null {
+  const win = EDIT_RULES.loop.speechWindowSec
+  const a = speechLevelDb(env, words.filter((w) => w.t0 >= startSec - 1e-6 && w.t1 <= startSec + win))
+  const b = speechLevelDb(env, words.filter((w) => w.t1 <= endSec + 1e-6 && w.t0 >= endSec - win))
   return a === null || b === null ? null : Math.abs(a - b)
 }
 
@@ -143,7 +178,7 @@ export function checkLoop(candidate: LoopCandidate | null, reason: string | null
       quietMeasured: candidate.quietMeasured,
       frameSim: seam?.frameSimilarity ?? null,
       loudDiff: seam?.loudnessDiffLu ?? null,
-      uncalibrated: true,
+      uncalibrated: false,
       wanted: wantedByStructure
     }
   }

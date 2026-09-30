@@ -260,7 +260,7 @@ Allowed on screen: the clip's own words and real chat messages only.
 | Cold open | join | hard cut back; no word shown twice within 2 s | D |
 | Loop | eligible | final length 30 s or less; seam score passes | D |
 | Loop | ending | last word plus 150-400 ms of quiet, cut on a word boundary | B/D |
-| Loop | seam | frame similarity 0.55 or more (calibrate) and loudness within 3 LU; audio crossfade 30-100 ms; no end card | D |
+| Loop | seam | facecam picture correlation 0.90 or more and speech level within 6 dB (section 7); audio crossfade 30-100 ms; no end card | D, calibrated on 80 real seams |
 | Pacing | pause trigger | over 0.5 s (0.7 s when game audio is loud) | D |
 | Pacing | kept gap | about 0.30 s, at least 150 ms per side | B (own measurement) |
 | Pacing | reaction beat | keep 0.5-1.0 s after the payoff | B (peak-end) |
@@ -294,4 +294,20 @@ Allowed on screen: the clip's own words and real chat messages only.
 - The safe-zone numbers change with app UI updates; re-check each release with a test export.
 - Loops: whether they raise ranking is unknown; YouTube's own definition excludes them from engaged views.
 - Cold open: no evidence it beats a straight cut; the two-variant design plus manual comparison is the test. With a few dozen clips per platform there is little statistical power, so treat differences as hints.
-- Thresholds to calibrate on real VOD clips before shipping: content floor 40%, seam score, loud-gap trigger, 0.30 s kept gap.
+- Thresholds to calibrate on real VOD clips before shipping: content floor 40%, loud-gap trigger, 0.30 s kept gap. (The seam thresholds are calibrated, section 7.)
+
+## 7. Loop seam calibration (2026-09-30)
+
+The first values (frame similarity 0.55 on a 32x18 grey picture; last 400 ms within 3 dB of the first 400 ms) did not separate anything on real clips: over the 10 loop ends the engine found in 40 clips (3 real VODs) the frame score ran 0.56-0.85, so every seam passed it, and the loudness step ran 0.2-32.7 dB because the last 400 ms contain the 150-400 ms of quiet the loop is required to end on, so almost every loop read as a jump from speech to silence (2 of 10 passed, none of the 6 clips whose structure asks for a loop).
+
+Data: 80 seams (each clip's own loop end where there was one, plus up to two other phrase ends with 0.25 s of quiet after them), measured on the picture the layout shows of the person and on the speech. 22 of them were labelled by eye from the first and last picture: good (looks like one continuous take, n = 10) or jump (a gesture, a lean or turn, a scene change, the cam going full screen, n = 12). The other 58 were left unlabelled.
+
+| Measure | Good (n=10) | Jump (n=12) | Rule |
+|---|---|---|---|
+| Correlation of the first and last facecam picture, 64x64 grey (whole frame 64x36 without a cam) | 0.70-1.00, median 0.94 | -0.02-0.87, median 0.38 | 0.90 or more: no jump passes (highest 0.87), 8 of 10 good ones pass; the two misses are dark or looking-down poses (0.84, 0.70) |
+| Speech level step: median dB under the words of the first 2 s against the last 2 s (up to where the last word's sound ends) | - | - | 6 dB or less: median over all 80 seams 4.9 dB, quartiles 2.9 and 9.6 |
+
+Raw picture difference (mean grey change) was rejected: it moves with brightness and with the game, e.g. a doc page with the person looking down scored 19 (good) and a big gesture scored 8.6 (jump). The game area was left out on purpose: it changes on its own in any stream, and the ratio of the seam change to the clip's usual change did not look like a separator on the seams inspected. A 0.4-0.5 s speech window was tried (the level of half a second of speech swings 25 dB or more with a gap or a breath) and dropped for the 2 s median over word frames.
+
+Result: 15 of 80 seams pass both (19%); 3 of the 13 loop ends the engine found. The labelled set is small and one person's eye, and the facecam is the same one for both streamers here, so treat 0.90 and 6 dB as calibrated on these clips, not proven. Layouts without a facecam use the whole frame with the same 0.90, which has no data behind it. Stored plans from before this (`calibrated: false`) have their seam measured again.
+

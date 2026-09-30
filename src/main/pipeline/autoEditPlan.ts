@@ -79,7 +79,7 @@ export async function resolveAutoEdit(store: Store, args: ResolveArgs): Promise<
     const prev = clip.editPlan?.loop
     // The same loop end as last time has the same seam: no need to grab the frames again.
     let seam =
-      prev && prev.seamScore !== null && prev.loudnessDiffLu !== null && prev.endSec !== null && Math.abs(prev.endSec - probe.endSec) < 0.01
+      prev && prev.calibrated && prev.seamScore !== null && prev.loudnessDiffLu !== null && prev.endSec !== null && Math.abs(prev.endSec - probe.endSec) < 0.01
         ? { frameSimilarity: prev.seamScore, loudnessDiffLu: prev.loudnessDiffLu }
         : null
     if (!seam) {

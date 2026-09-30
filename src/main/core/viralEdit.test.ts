@@ -322,6 +322,19 @@ describe('buildViralEdit: pacing', () => {
     expect(stats.cuts).toBe(0)
   })
 
+  it('hookOnly cuts just the lead-in and keeps the rest as one segment, pauses included', () => {
+    const f = tightFacts([...speech(4.5, 4, 0.4), ...speech(8.5, 6, 0.4)], 12)
+    const { edl, stats } = buildViralEdit(decisionFor(f), f, { hookOnly: true })
+    expect(edl.segments).toEqual([{ srcStart: 4.35, srcEnd: 12, speed: 1 }])
+    expect(stats.cuts).toBe(0)
+    expect(stats.startSec).toBeCloseTo(4.35, 6)
+    // A lead-in that is not long enough to trim is left alone.
+    const near = tightFacts(speech(0.2, 10, 0.4), 12)
+    expect(buildViralEdit(decisionFor(near), near, { hookOnly: true }).edl.segments[0]!.srcStart).toBe(0)
+    // Plain wins when both are asked for.
+    expect(buildViralEdit(decisionFor(f), f, { hookOnly: true, plain: true }).edl.segments[0]!.srcStart).toBe(0)
+  })
+
   it('ends a looped edit where it is told to', () => {
     const f = tightFacts(speech(0, 20, 0.4), 30)
     const { edl } = buildViralEdit(decisionFor(f), f, { loop: { endSec: 8.4, crossfadeSec: 0.06 } })

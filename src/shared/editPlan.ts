@@ -60,8 +60,8 @@ export interface LoopPlan {
   loudnessDiffLu: number | null
   /** Quiet after the last word, seconds. */
   quietSec: number | null
-  /** The frame threshold is a starting value nobody has measured against real clips yet. */
-  calibrated: false
+  /** The seam was judged with the calibrated measures (facecam correlation, speech level); a plan saved before that has false and its seam is measured again. */
+  calibrated: boolean
 }
 
 /** How soon the first word or reaction lands in the edit: within 0.5 s, within 1 s, later, or not found. */

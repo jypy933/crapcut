@@ -40,6 +40,12 @@ export interface ViralEditOptions {
   envelope?: Envelope | null
   /** Skip the pause, lead-in and tail trimming (the edit the 10 s floor gave up on): the whole cut is kept as one segment. */
   plain?: boolean
+  /**
+   * Only cut the lead-in before the first speech or reaction (`hookStartSec`) and keep everything after it as one
+   * segment: the edit the 10 s floor allows when a long silent opening would otherwise be kept (`planAutoEdit` grows the end).
+   * Ignored with `plain`.
+   */
+  hookOnly?: boolean
   /** End the edit here (clip-relative seconds) with a replay-friendly loop ending. */
   loop?: { endSec: number; crossfadeSec: number } | null
 }
@@ -69,6 +75,7 @@ interface PacingContext {
   env: Envelope | null
   tight: boolean
   plain: boolean
+  hookOnly: boolean
   loopEndSec: number | null
 }
 
@@ -135,6 +142,12 @@ function trimSilences(words: Word[], clipLength: number, peakSrcT: number, ctx: 
   if (ctx.plain) return { segments: [{ srcStart: 0, srcEnd: clipLength, speed: 1 }], stats }
 
   const start = hookStartSec(first)
+  if (ctx.hookOnly) {
+    const end = clamp(ctx.loopEndSec ?? clipLength, start + 0.05, Math.max(start + 0.05, clipLength))
+    stats.startSec = start
+    stats.endSec = end
+    return { segments: [{ srcStart: start, srcEnd: end, speed: 1 }], stats }
+  }
   if (words.length === 0) {
     stats.startSec = start
     return { segments: [{ srcStart: start, srcEnd: Math.max(start + 0.05, clipLength), speed: 1 }], stats }
@@ -312,7 +325,7 @@ function finish(r: Recipe): Edl {
 
 /** `options.envelope` here is already clip-relative (see `buildViralEdit`). */
 function pacingContext(options: ViralEditOptions, tight: boolean): PacingContext {
-  return { env: options.envelope ?? null, tight, plain: options.plain === true, loopEndSec: options.loop?.endSec ?? null }
+  return { env: options.envelope ?? null, tight, plain: options.plain === true, hookOnly: options.hookOnly === true, loopEndSec: options.loop?.endSec ?? null }
 }
 
 /** The shared "nothing special, just the house look" shape every recipe starts from. */

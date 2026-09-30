@@ -11,7 +11,7 @@
 // up on the clip (`drop`) only if it is still short.
 
 import type { ClipEditPlan, ColdOpenLlmVerdict, HookGrade } from '@shared/editPlan'
-import type { Range } from '@shared/types'
+import type { Range, Word } from '@shared/types'
 import { coldOpenVariantEdl, buildViralEdit, clipRelativeWords, type PacingStats, type ViralEditOptions } from './viralEdit'
 import { planColdOpen } from './coldOpen'
 import {
@@ -83,7 +83,13 @@ export interface PlanResult {
   /** The content floor held (a peak inside: chat, loud or a transcript moment; speech or loud frames over 40%). */
   contentOk: boolean
   /** Where the seam should be measured when a loop is possible but no measurement was given yet; clip-relative seconds. */
-  seamProbe: { window: Range; firstSec: number; lastSec: number; endSec: number } | null
+  seamProbe: { window: Range; firstSec: number; lastSec: number; endSec: number; speechEndSec: number; words: Word[] } | null
+}
+
+/** Grows `window` by up to `need` seconds at its end only, as far as `bounds` allow. */
+export function growEnd(window: Range, bounds: Range, need: number): Range {
+  const room = Math.max(0, bounds.end - window.end)
+  return { start: window.start, end: window.end + Math.min(need, room) }
 }
 
 /** Grows `window` by up to `need` seconds inside `bounds`, half each side, shifting what one side cannot give to the other. */
@@ -105,26 +111,46 @@ export function planAutoEdit(input: PlanInput): PlanResult {
   const facts: ClipFacts = input.facts.loudness || !env ? input.facts : { ...input.facts, loudness: perSecondLoudness(env), loudnessOffset: env.startSec }
   const floor = EDIT_RULES.length.finalFloorSec
 
-  const build = (window: Range, plain: boolean, loop: ViralEditOptions['loop'] = null): { edl: Edl; stats: PacingStats; final: number } => {
-    const built = buildViralEdit(decision, { ...facts, window }, { ...options, envelope: env, plain, loop })
+  type Mode = 'full' | 'plain' | 'hook'
+  const build = (window: Range, mode: Mode, loop: ViralEditOptions['loop'] = null): { edl: Edl; stats: PacingStats; final: number } => {
+    const built = buildViralEdit(decision, { ...facts, window }, { ...options, envelope: env, plain: mode === 'plain', hookOnly: mode === 'hook', loop })
     return { ...built, final: outputDuration(built.edl) }
   }
 
   // The floor, in the owner's order: skip the edit, then grow the cut, then drop.
+  // One exception: a long silent opening (first speech or reaction past the hard
+  // hook limit) is cut anyway and the END is grown from the padding instead, so
+  // the clip does not open on dead air. If the padding cannot cover it, the
+  // usual order is tried before the clip is given up on.
   let window = facts.window
-  let plain = false
+  let mode: Mode = 'full'
   let extendedSec = 0
-  let built = build(window, false)
+  let built = build(window, 'full')
   if (built.final < floor - 1e-6) {
-    plain = true
-    built = build(window, true)
-    if (built.final < floor - 1e-6) {
-      const grown = growWindow(window, bounds, floor - built.final + EXTEND_MARGIN_SEC)
-      extendedSec = grown.end - grown.start - (window.end - window.start)
-      window = grown
-      built = build(window, true)
+    const first = built.stats.firstEventSec
+    if (first !== null && first > EDIT_RULES.hook.hardSec) {
+      const hook = build(window, 'hook')
+      const grown = hook.final < floor - 1e-6 ? growEnd(window, bounds, floor - hook.final + EXTEND_MARGIN_SEC) : window
+      const regrown = grown === window ? hook : build(grown, 'hook')
+      if (regrown.final >= floor - 1e-6) {
+        mode = 'hook'
+        window = grown
+        extendedSec = grown.end - facts.window.end
+        built = regrown
+      }
+    }
+    if (mode === 'full') {
+      mode = 'plain'
+      built = build(window, 'plain')
+      if (built.final < floor - 1e-6) {
+        const grown = growWindow(window, bounds, floor - built.final + EXTEND_MARGIN_SEC)
+        extendedSec = grown.end - grown.start - (window.end - window.start)
+        window = grown
+        built = build(window, 'plain')
+      }
     }
   }
+  const plain = mode === 'plain'
   const belowFloor = built.final < floor - 1e-6
 
   const clipLength = window.end - window.start
@@ -140,7 +166,7 @@ export function planAutoEdit(input: PlanInput): PlanResult {
   const eligible = !!loopPlan.candidate && !!seam && seamPasses(seam)
   let final = straight
   if (loopPlan.candidate && eligible && decision.loopEnding) {
-    final = build(window, false, { endSec: loopPlan.candidate.endSec, crossfadeSec: seamCrossfadeSec(loopPlan.candidate.finalSec) })
+    final = build(window, mode, { endSec: loopPlan.candidate.endSec, crossfadeSec: seamCrossfadeSec(loopPlan.candidate.finalSec) })
   }
 
   // Content floor, on the edit as it will be.
@@ -151,8 +177,7 @@ export function planAutoEdit(input: PlanInput): PlanResult {
 
   // Hook.
   const first = final.stats.firstEventSec
-  const quoteBarAtZero = final.edl.overlays.some((o) => o.kind === 'quoteBar' && o.t0 <= 0)
-  const firstOut = first === null ? null : quoteBarAtZero ? 0 : sourceToOutputTime(final.edl.segments, final.edl.freeze, Math.max(first, final.edl.segments[0]!.srcStart), false)
+  const firstOut = first === null ? null : sourceToOutputTime(final.edl.segments, final.edl.freeze, Math.max(first, final.edl.segments[0]!.srcStart), false)
   const hook = checkHook(firstOut, frameZeroIsContent(final.edl))
 
   // Cold open, planned on the straight (non-loop) edit.
@@ -181,7 +206,7 @@ export function planAutoEdit(input: PlanInput): PlanResult {
       seamScore: seam?.frameSimilarity ?? null,
       loudnessDiffLu: seam?.loudnessDiffLu ?? null,
       quietSec: loopPlan.candidate?.quietSec ?? null,
-      calibrated: false
+      calibrated: true
     },
     hook: { grade: hook.values.grade as HookGrade, pass: hook.status === 'pass' },
     content: { pass: content.status !== 'fail', coverage }
@@ -202,7 +227,15 @@ export function planAutoEdit(input: PlanInput): PlanResult {
 
   const seamProbe =
     loopPlan.candidate && !seam
-      ? { window, firstSec: straight.edl.segments[0]!.srcStart, lastSec: Math.max(0, loopPlan.candidate.endSec - SEAM_LAST_FRAME_BACKOFF_SEC), endSec: loopPlan.candidate.endSec }
+      ? {
+          window,
+          firstSec: straight.edl.segments[0]!.srcStart,
+          lastSec: Math.max(0, loopPlan.candidate.endSec - SEAM_LAST_FRAME_BACKOFF_SEC),
+          endSec: loopPlan.candidate.endSec,
+          // The speech level is read from the first word of the edit to where the last word's sound ends, not into the quiet the loop ends on.
+          speechEndSec: loopPlan.candidate.speechEndSec,
+          words
+        }
       : null
 
   return { window, edl: final.edl, coldOpenEdl, plan, checks, drop: belowFloor, contentOk: content.status !== 'fail', seamProbe }

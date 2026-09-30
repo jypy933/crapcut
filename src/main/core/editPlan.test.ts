@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, Word } from '@shared/types'
-import { planAutoEdit, growWindow, type PlanInput } from './editPlan'
+import { planAutoEdit, growEnd, growWindow, type PlanInput } from './editPlan'
 import type { Envelope } from './editRules'
 import { outputDuration, validateEdl } from './edl'
 import { pickStructure } from './structurePick'
@@ -50,6 +50,14 @@ describe('growWindow', () => {
   it('stops at the bounds', () => {
     expect(growWindow({ start: 100, end: 108 }, { start: 100, end: 108 }, 5)).toEqual({ start: 100, end: 108 })
     expect(growWindow({ start: 100, end: 108 }, { start: 99, end: 109 }, 5)).toEqual({ start: 99, end: 109 })
+  })
+})
+
+describe('growEnd', () => {
+  it('grows the end only, as far as the bounds allow', () => {
+    expect(growEnd({ start: 100, end: 108 }, { start: 80, end: 130 }, 4)).toEqual({ start: 100, end: 112 })
+    expect(growEnd({ start: 100, end: 108 }, { start: 80, end: 110 }, 4)).toEqual({ start: 100, end: 110 })
+    expect(growEnd({ start: 100, end: 108 }, { start: 80, end: 108 }, 4)).toEqual({ start: 100, end: 108 })
   })
 })
 
@@ -149,6 +157,58 @@ describe('planAutoEdit: the final-length floor (skip the edit, then extend, then
   })
 })
 
+describe('planAutoEdit: a long silent opening under the floor', () => {
+  /** A 12 s cut whose first word comes at 4.5 s; speech carries on through the padding after it. */
+  function lateStart(structure: 'tightCut' | 'quoteCard' = 'tightCut', bounds = { start: 100, end: 140 }): { input: PlanInput; facts: ClipFacts } {
+    const words = speech(104.5, 140)
+    const facts: ClipFacts = { window: { start: 100, end: 112 }, words, chatMessages: chat(107), loudness: null, loudnessOffset: 0 }
+    const envelope = env(80, 70, words, -50, -20, { from: 106, to: 108, db: -8 })
+    return { facts, input: { facts, decision: decisionFor(facts, { structure }), bounds, envelope } }
+  }
+
+  it('cuts the silence anyway and grows the end from the padding to get back over the floor', () => {
+    const { input } = lateStart()
+    const r = planAutoEdit(input)
+    expect(r.plan.editSkipped).toBe(false)
+    expect(r.window.start).toBe(100)
+    expect(r.window.end).toBeGreaterThan(112)
+    expect(r.plan.extendedSec).toBeCloseTo(r.window.end - 112, 6)
+    expect(r.edl.segments[0]!.srcStart).toBeCloseTo(4.35, 2)
+    expect(r.plan.finalSec).toBeGreaterThanOrEqual(10)
+    expect(r.plan.finalSec).toBeLessThan(10.3)
+    expect(r.drop).toBe(false)
+    expect(r.plan.hook?.pass).toBe(true)
+  })
+
+  it('only takes this route for an opening past the hard hook limit: a shorter lead-in keeps the old order (skip the edit)', () => {
+    const words = speech(100.8, 140)
+    const facts: ClipFacts = { window: { start: 100, end: 108 }, words, chatMessages: chat(104), loudness: null, loudnessOffset: 0 }
+    const r = planAutoEdit({ facts, decision: decisionFor(facts), bounds: { start: 90, end: 140 } })
+    expect(r.plan.editSkipped).toBe(true)
+    expect(r.window.start).toBeLessThan(100)
+  })
+
+  it('falls back to skipping the edit when the padding after the end cannot cover it, and drops only when nothing is left', () => {
+    const skipped = planAutoEdit(lateStart('tightCut', { start: 100, end: 112 }).input)
+    expect(skipped.plan.editSkipped).toBe(true)
+    expect(skipped.plan.finalSec).toBeCloseTo(12, 6)
+    expect(skipped.drop).toBe(false)
+
+    const words = speech(104.5, 108)
+    const facts: ClipFacts = { window: { start: 100, end: 108 }, words, chatMessages: chat(106), loudness: null, loudnessOffset: 0 }
+    const dropped = planAutoEdit({ facts, decision: decisionFor(facts), bounds: { start: 100, end: 108 } })
+    expect(dropped.drop).toBe(true)
+  })
+
+  it('reports a first word past 1 s as a failed hook, quote bar or not', () => {
+    for (const structure of ['tightCut', 'quoteCard'] as const) {
+      const r = planAutoEdit(lateStart(structure, { start: 100, end: 112 }).input)
+      expect(r.plan.hook).toEqual({ grade: 'late', pass: false })
+      expect(r.checks.find((c) => c.check === 'hook')!.status).toBe('fail')
+    }
+  })
+})
+
 describe('planAutoEdit: the content floor', () => {
   it('fails a clip with no chat peak inside when there is chat, and one with too little speech or loudness', () => {
     const noPeak = healthy({ chatMessages: [{ t: 105, user: 'a', text: 'hi' }] })
@@ -244,15 +304,19 @@ describe('planAutoEdit: loop', () => {
     expect(r.plan.loop.seamScore).toBeNull()
     expect(r.plan.loop.endSec).toBe(r.seamProbe!.endSec)
     expect(r.edl.ending).toEqual({ kind: 'cut' })
-    expect(r.plan.loop.calibrated).toBe(false)
+    expect(r.plan.loop.calibrated).toBe(true)
+    // What the measurement needs to read the speech level: the words, and where the last one's sound ends (before the quiet).
+    expect(r.seamProbe!.words.length).toBeGreaterThan(5)
+    expect(r.seamProbe!.speechEndSec).toBeLessThan(r.seamProbe!.endSec)
+    expect(r.seamProbe!.endSec - r.seamProbe!.speechEndSec).toBeGreaterThanOrEqual(0.15)
   })
 
   it('loops when the structure wants one and the seam passes: a hard cut, 30-100 ms audio crossfade, ending on the quiet after the last word', () => {
     const input = loopable()
     const probe = planAutoEdit(input).seamProbe!
-    const r = planAutoEdit({ ...input, seam: { frameSimilarity: 0.8, loudnessDiffLu: 1.2 } })
+    const r = planAutoEdit({ ...input, seam: { frameSimilarity: 0.95, loudnessDiffLu: 1.2 } })
     expect(r.seamProbe).toBeNull()
-    expect(r.plan.loop).toMatchObject({ eligible: true, seamScore: 0.8, loudnessDiffLu: 1.2 })
+    expect(r.plan.loop).toMatchObject({ eligible: true, seamScore: 0.95, loudnessDiffLu: 1.2 })
     expect(r.edl.ending.kind).toBe('loop')
     if (r.edl.ending.kind === 'loop') {
       expect(r.edl.ending.crossfadeSec).toBeGreaterThanOrEqual(0.03)
@@ -265,7 +329,7 @@ describe('planAutoEdit: loop', () => {
 
   it('is eligible on the plan but leaves the straight edit alone when the structure did not ask for a loop (a property of a version)', () => {
     const input = loopable()
-    const r = planAutoEdit({ ...input, decision: decisionFor(input.facts), seam: { frameSimilarity: 0.8, loudnessDiffLu: 1.2 } })
+    const r = planAutoEdit({ ...input, decision: decisionFor(input.facts), seam: { frameSimilarity: 0.95, loudnessDiffLu: 1.2 } })
     expect(r.plan.loop.eligible).toBe(true)
     expect(r.edl.ending).toEqual({ kind: 'cut' })
   })
@@ -277,7 +341,9 @@ describe('planAutoEdit: loop', () => {
     expect(badFrames.plan.loop.seamScore).toBe(0.3)
     expect(badFrames.edl.ending).toEqual({ kind: 'cut' })
     expect(badFrames.checks.find((c) => c.check === 'loop')!.status).toBe('fail')
-    expect(planAutoEdit({ ...input, seam: { frameSimilarity: 0.9, loudnessDiffLu: 5 } }).edl.ending).toEqual({ kind: 'cut' })
+    expect(planAutoEdit({ ...input, seam: { frameSimilarity: 0.95, loudnessDiffLu: 7 } }).edl.ending).toEqual({ kind: 'cut' })
+    expect(planAutoEdit({ ...input, seam: { frameSimilarity: 0.89, loudnessDiffLu: 1 } }).edl.ending).toEqual({ kind: 'cut' })
+    expect(planAutoEdit({ ...input, seam: { frameSimilarity: 0.9, loudnessDiffLu: 6 } }).edl.ending.kind).toBe('loop')
   })
 
   it('has no loop candidate over 30 s, or when the edit was skipped for the floor', () => {

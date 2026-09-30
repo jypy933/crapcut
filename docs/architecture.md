@@ -261,7 +261,11 @@ and the loop seam frames measured from the downloaded clip with FFmpeg,
 
 - Length: the 10 s floor applies to the final edited length. When an edit would
   end under it the edit is skipped (the whole cut is kept), then the cut is
-  grown from its download padding, and only then is the clip dropped. Caps
+  grown from its download padding, and only then is the clip dropped. The one
+  exception is a long silent opening (first speech or reaction past 1 s): that
+  lead-in is cut anyway and the END is grown from the padding instead
+  (`hookOnly` in `core/viralEdit.ts`, `growEnd` in `core/editPlan.ts`); if the
+  padding cannot cover it, the usual order applies. Caps
   (TikTok 60 s, Shorts 60 s, Reels 90 s) are stored as a per-platform fit and
   enforced by the per-platform export (see below).
 - Content floor: a chat peak inside and speech or loud frames over at least 40%
@@ -272,7 +276,8 @@ and the loop seam frames measured from the downloaded clip with FFmpeg,
   0.5 s (0.7 s with loud game sound in them, measured on the fine envelope) are
   cut to about 0.30 s, never inside a word or the sound of its tail; the
   reaction beat after the payoff is kept and the edit ends about a second after
-  the reaction.
+  the reaction. The hook check reads the first speech or reaction as it lands in
+  the output and fails past 1 s, quote bar or not.
 - Cold open (`core/coldOpen.ts`): a plan, stored for a second version of the clip.
   Chat, loudness and the transcript must agree; the model confirms when it is
   running, and without it the gate is stricter. `core/viralEdit.ts`
@@ -281,8 +286,9 @@ and the loop seam frames measured from the downloaded clip with FFmpeg,
   open skips, so it is a plain tight cut and never replays its payoff.
 - Loop (`core/loopSeam.ts`): a property of a version. Eligible at 30 s or less
   when the edit can end on the last word plus 150-400 ms of quiet and the first
-  and last frame look alike (frame threshold 0.55, not yet calibrated) with the
-  last 400 ms within 3 dB of the first. The video is a hard cut, the audio
+  and last picture of the person look alike (facecam correlation 0.90, whole frame
+  without a cam) with the speech level of the first and last 2 s within 6 dB
+  (calibrated on 80 real seams, see the research doc, section 7). The video is a hard cut, the audio
   fades over 60 ms at both ends; no end card. The structures that ask for a
   loop (`freezeLoop`, a late `quoteCard`) only get one when this passes.
 

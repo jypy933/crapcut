@@ -22,6 +22,8 @@ function findOnPath(name: string): string | null {
 
 const ffmpeg = findOnPath(process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
 const signal = new AbortController().signal
+/** Speech-like words every 0.5 s over a 4 s clip of steady tone. */
+const probe = { firstSec: 0.2, lastSec: 3.5, endSec: 3.6, speechEndSec: 3.4, words: Array.from({ length: 7 }, (_, i) => ({ t0: 0.3 + i * 0.5, t1: 0.6 + i * 0.5, text: 'blah' })) }
 
 describe.skipIf(!ffmpeg)('seamMeasure (FFmpeg)', () => {
   let dir: string
@@ -58,7 +60,7 @@ describe.skipIf(!ffmpeg)('seamMeasure (FFmpeg)', () => {
 
   it('scores identical first and last frames as a good seam, with no loudness step', async () => {
     const env = await measureEnvelope(ffmpeg!, file('steady.mp4'), 4, 500, signal)
-    const seam = await measureSeam(ffmpeg!, file('steady.mp4'), { firstSec: 0.2, lastSec: 3.5, endSec: 3.6 }, { seekSec: 0, windowStartVod: 500 }, null, env, signal)
+    const seam = await measureSeam(ffmpeg!, file('steady.mp4'), probe, { seekSec: 0, windowStartVod: 500 }, null, env, signal)
     expect(seam).not.toBeNull()
     expect(seam!.frameSimilarity).toBeGreaterThan(0.95)
     expect(seam!.loudnessDiffLu).toBeLessThan(1)
@@ -66,17 +68,17 @@ describe.skipIf(!ffmpeg)('seamMeasure (FFmpeg)', () => {
 
   it('scores a red first frame against a blue last frame as a poor seam', async () => {
     const env = await measureEnvelope(ffmpeg!, file('red-blue.mp4'), 4, 500, signal)
-    const seam = await measureSeam(ffmpeg!, file('red-blue.mp4'), { firstSec: 0.2, lastSec: 3.5, endSec: 3.6 }, { seekSec: 0, windowStartVod: 500 }, null, env, signal)
-    expect(seam!.frameSimilarity).toBeLessThan(0.55)
+    const seam = await measureSeam(ffmpeg!, file('red-blue.mp4'), probe, { seekSec: 0, windowStartVod: 500 }, null, env, signal)
+    expect(seam!.frameSimilarity).toBeLessThan(0.9)
   }, 30_000)
 
   it('also compares a facecam area when the layout has one', async () => {
     const env = await measureEnvelope(ffmpeg!, file('red-blue.mp4'), 4, 500, signal)
-    const seam = await measureSeam(ffmpeg!, file('red-blue.mp4'), { firstSec: 0.2, lastSec: 3.5, endSec: 3.6 }, { seekSec: 0, windowStartVod: 500 }, { x: 0.6, y: 0.6, w: 0.3, h: 0.3 }, env, signal)
-    expect(seam!.frameSimilarity).toBeLessThan(0.55)
+    const seam = await measureSeam(ffmpeg!, file('red-blue.mp4'), probe, { seekSec: 0, windowStartVod: 500 }, { x: 0.6, y: 0.6, w: 0.3, h: 0.3 }, env, signal)
+    expect(seam!.frameSimilarity).toBeLessThan(0.9)
   }, 30_000)
 
   it('has no seam to judge without a loudness envelope', async () => {
-    expect(await measureSeam(ffmpeg!, file('steady.mp4'), { firstSec: 0.2, lastSec: 3.5, endSec: 3.6 }, { seekSec: 0, windowStartVod: 500 }, null, null, signal)).toBeNull()
+    expect(await measureSeam(ffmpeg!, file('steady.mp4'), probe, { seekSec: 0, windowStartVod: 500 }, null, null, signal)).toBeNull()
   })
 })

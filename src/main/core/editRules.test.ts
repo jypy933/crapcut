@@ -43,7 +43,7 @@ describe('EDIT_RULES (the approved starting values)', () => {
     expect([EDIT_RULES.hook.softSec, EDIT_RULES.hook.hardSec, EDIT_RULES.hook.trimOverSec, EDIT_RULES.hook.keepSec]).toEqual([0.5, 1.0, 0.3, 0.15])
     expect([EDIT_RULES.pacing.pauseSec, EDIT_RULES.pacing.loudGamePauseSec, EDIT_RULES.pacing.keepGapSec, EDIT_RULES.pacing.minSideSec]).toEqual([0.5, 0.7, 0.3, 0.15])
     expect([EDIT_RULES.coldOpen.setupMinSec, EDIT_RULES.coldOpen.previewMinSec, EDIT_RULES.coldOpen.previewMaxSec, EDIT_RULES.coldOpen.maxShareOfClip]).toEqual([8, 1.5, 4, 0.2])
-    expect([EDIT_RULES.loop.maxFinalSec, EDIT_RULES.loop.quietMinSec, EDIT_RULES.loop.quietMaxSec, EDIT_RULES.loop.minFrameSimilarity, EDIT_RULES.loop.maxLoudnessDiffLu]).toEqual([30, 0.15, 0.4, 0.55, 3])
+    expect([EDIT_RULES.loop.maxFinalSec, EDIT_RULES.loop.quietMinSec, EDIT_RULES.loop.quietMaxSec, EDIT_RULES.loop.minFrameSimilarity, EDIT_RULES.loop.maxLoudnessDiffLu]).toEqual([30, 0.15, 0.4, 0.9, 6])
     expect([EDIT_RULES.loop.crossfadeMinSec, EDIT_RULES.loop.crossfadeMaxSec]).toEqual([0.03, 0.1])
   })
 })
