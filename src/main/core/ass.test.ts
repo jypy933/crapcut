@@ -89,7 +89,7 @@ describe('ASS helpers', () => {
 })
 
 describe('buildAss', () => {
-  const words = [w(0.5, 0.8, 'hello'), w(0.8, 1.1, 'there'), w(1.1, 1.5, 'bro!'), w(3, 3.4, '{evil}')]
+  const words = [w(0.5, 0.8, 'hello'), w(0.8, 1.1, 'there'), w(1.1, 1.5, 'bro'), w(3, 3.4, '{evil}')]
   const ass = buildAss(words, defaultAssStyle('vertical', 0.7, true))
   const dialogues = ass.split('\n').filter((l) => l.startsWith('Dialogue:'))
 
@@ -101,7 +101,7 @@ describe('buildAss', () => {
   it('emits one event per word with the word highlighted', () => {
     expect(dialogues).toHaveLength(4)
     expect(dialogues[0]).toContain('0:00:00.50,0:00:00.80')
-    expect(dialogues[1]).toContain('HELLO {\\c&H00D4FF&}THERE{\\c&HFFFFFF&} BRO!')
+    expect(dialogues[1]).toContain('HELLO {\\c&H00D4FF&}THERE{\\c&HFFFFFF&} BRO')
     expect(dialogues[0]).toContain('\\pos(540,1344)')
   })
   it('escapes user text', () => {
@@ -168,20 +168,48 @@ describe('caption style presets', () => {
     }
   })
 
-  it('bold pop highlights shouted words and numbers even when not active', () => {
-    // All 3 words land in one group (maxWords 3): "we" is active, "100" and
-    // "STOP" should stay highlighted as keywords.
+  const dialogues = (ass: string): string[] => ass.split('\n').filter((l) => l.startsWith('Dialogue:'))
+
+  it('emphasises one key word per line, in its accent colour and a little larger, from the first event', () => {
+    // One group (maxWords 3): "we" is active, "STOP" (the punchline) is the key word.
     const words = [w(0, 0.3, 'we'), w(0.3, 0.6, '100'), w(0.6, 0.9, 'STOP')]
-    const ass = buildAss(words, defaultAssStyle('vertical', 0.7, false, captionStyle('bold')))
-    const first = ass.split('\n').filter((l) => l.startsWith('Dialogue:'))[0]!
-    expect(first.match(/\\c/g)?.length).toBe(6) // 3 highlighted words, open+close each
+    const style = defaultAssStyle('vertical', 0.7, false, captionStyle('clean'))
+    const [first, second, third] = dialogues(buildAss(words, style))
+    // Active "we" plus the key word: two coloured runs, open+close each.
+    expect(first!.match(/\\c/g)?.length).toBe(4)
+    expect(first).toContain(inlineColor(style.emphasisColor))
+    expect(first).toContain('\\fscx108\\fscy108')
+    // Once the key word is spoken it takes the highlight colour, still larger.
+    expect(third!.match(/\\c/g)?.length).toBe(2)
+    expect(third).toContain(inlineColor(style.highlightColor))
+    expect(third).toContain('\\fscx108')
+    expect(second).toContain('\\fscx108')
   })
 
-  it('clean does not highlight words that are not active', () => {
-    const words = [w(0, 0.3, 'we'), w(0.3, 0.6, '100'), w(0.6, 0.9, 'STOP')]
-    const ass = buildAss(words, defaultAssStyle('vertical', 0.7, false, captionStyle('clean')))
-    const first = ass.split('\n').filter((l) => l.startsWith('Dialogue:'))[0]!
-    expect(first.match(/\\c/g)?.length).toBe(2) // only the active word
+  it('leaves lines without a key word to the word-by-word highlight only', () => {
+    const words = [w(0, 0.3, 'we'), w(0.3, 0.6, 'go'), w(0.6, 0.9, 'now')]
+    for (const style of CAPTION_STYLES) {
+      const first = dialogues(buildAss(words, defaultAssStyle('vertical', 0.7, false, style)))[0]!
+      expect(first.match(/\\c/g)?.length).toBe(2) // only the active word
+      expect(first).not.toContain('\\fscx108')
+    }
+  })
+
+  it('never emphasises a filler word, and follows the user text edits', () => {
+    const style = defaultAssStyle('vertical', 0.7, false, captionStyle('bold'))
+    const filler = dialogues(buildAss([w(0, 0.3, 'OK'), w(0.3, 0.6, 'um'), w(0.6, 0.9, 'like')], style))[0]!
+    expect(filler.match(/\\c/g)?.length).toBe(2)
+    const edited = dialogues(buildAss([w(0, 0.3, 'we'), w(0.3, 0.6, 'beat'), w(0.6, 0.9, '3rd')], style))[0]!
+    expect(edited.match(/\\c/g)?.length).toBe(4)
+    expect(edited).toContain('\\fscx106')
+  })
+
+  it('a style with bump 1 only changes the colour, and the bump keeps the pop of the first event', () => {
+    const words = [w(0, 0.3, 'we'), w(0.3, 0.6, '100'), w(0.6, 0.9, 'go')]
+    const flat = { ...defaultAssStyle('vertical', 0.7, false, captionStyle('clean')), emphasisScale: 1 }
+    expect(dialogues(buildAss(words, flat))[0]).not.toContain('\\fscx100\\fscy100\\c')
+    const bumped = dialogues(buildAss(words, defaultAssStyle('vertical', 0.7, false, captionStyle('clean'))))[0]!
+    expect(bumped).toContain('\\t(0,90,\\fscx108\\fscy108)')
   })
 
   it('a style without pop skips the grow-in tag', () => {

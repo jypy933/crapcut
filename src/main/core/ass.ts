@@ -3,7 +3,8 @@
 
 import { assColor, assEscape, inlineColor } from '@shared/assText'
 import { clampCaptionY } from '@shared/captionPlacement'
-import { displayText, groupWords, isKeywordWord } from '@shared/captions'
+import { pickEmphasis } from '@shared/captionEmphasis'
+import { displayText, groupWords } from '@shared/captions'
 import { CAPTION_STYLES, type CaptionStyle } from '@shared/captionStyles'
 import type { ChatOverlayLine } from '@shared/chatOverlay'
 import { toOutputPixels } from '@shared/overlayPosition'
@@ -28,8 +29,10 @@ export interface AssStyle {
   box: boolean
   /** The spoken word grows in briefly when a new line appears. */
   pop: boolean
-  /** Shouted words, numbers and ALL CAPS words get the highlight colour too. */
-  emphasizeKeywords: boolean
+  /** The key word picked by `pickEmphasis` waits in this colour instead of the text colour. */
+  emphasisColor: string
+  /** And is this much bigger than the rest of the line (1 for no bump). */
+  emphasisScale: number
 }
 
 export function defaultAssStyle(format: 'vertical' | 'horizontal', y: number, uppercase: boolean, preset: CaptionStyle = CAPTION_STYLES[0]!): AssStyle {
@@ -47,7 +50,8 @@ export function defaultAssStyle(format: 'vertical' | 'horizontal', y: number, up
     highlightColor: preset.highlightColor,
     box: preset.box,
     pop: preset.pop,
-    emphasizeKeywords: preset.emphasizeKeywords
+    emphasisColor: preset.emphasisColor,
+    emphasisScale: preset.emphasisScale
   }
 }
 
@@ -90,8 +94,9 @@ function chatEventLine(line: ChatOverlayLine): string {
 
 /**
  * Words must be relative to the clip start (seconds). Every word gets its own
- * event showing the whole group with that word highlighted; a style with
- * keyword emphasis also highlights shouted/number words while they wait.
+ * event showing the whole group with that word highlighted; the group's key
+ * word (`pickEmphasis`, at most one) also shows in the style's emphasis colour
+ * and a little larger.
  *
  * `chat`, when given, adds the chat-overlay lines (already windowed, wrapped
  * and escaped by `shared/chatOverlay.ts`) as a second style/layer in the same
@@ -105,6 +110,14 @@ export function buildAss(words: Word[], style: AssStyle, chat?: ChatOverlayAssIn
   const back = assColor('#000000', style.box ? 0x30 : 0x80)
   const highlight = inlineColor(style.highlightColor)
   const normal = inlineColor(style.textColor)
+  const emphasisColour = inlineColor(style.emphasisColor)
+  const bump = style.emphasisScale !== 1
+  /** Size tags for text at `scale` times normal; with `pop` it grows in like the line's own pop. */
+  const sizeTags = (scale: number, pop: boolean): string => {
+    const pct = (n: number): number => Math.round(n * 100)
+    if (!pop) return `\\fscx${pct(scale)}\\fscy${pct(scale)}`
+    return `\\fscx${pct(scale * 0.88)}\\fscy${pct(scale * 0.88)}\\t(0,90,\\fscx${pct(scale)}\\fscy${pct(scale)})`
+  }
   // The caption block is centred on this point; the preview places it with the same mapping.
   const { x, y } = toOutputPixels({ x: 0.5, y: clampCaptionY(style.y) }, { width: style.width, height: style.height })
   const margin = Math.round(style.width * 0.06)
@@ -113,17 +126,26 @@ export function buildAss(words: Word[], style: AssStyle, chat?: ChatOverlayAssIn
   const styleLines = [`Style: Caption,${style.fontName},${style.fontSize},${primary},${primary},${outlineColour},${back},0,0,0,0,100,100,0,0,${borderStyle},${style.outline},${style.shadow},5,${margin},${margin},0,1`]
   const eventLines: string[] = []
 
-  for (const group of groupWords(words)) {
+  const groups = groupWords(words)
+  const emphasis = pickEmphasis(groups)
+  for (const [g, group] of groups.entries()) {
     const texts = group.words.map((w) => assEscape(displayText(w.text, style.uppercase)))
     for (let i = 0; i < group.words.length; i++) {
       const start = i === 0 ? group.start : group.words[i]!.t0
       const end = i < group.words.length - 1 ? group.words[i + 1]!.t0 : group.end
       if (end - start < 0.01) continue
-      const popTag = style.pop && i === 0 ? '\\fscx88\\fscy88\\t(0,90,\\fscx100\\fscy100)' : ''
+      const popNow = style.pop && i === 0
+      const popTag = popNow ? '\\fscx88\\fscy88\\t(0,90,\\fscx100\\fscy100)' : ''
+      // The key word keeps its size in every event of its group so the line
+      // never shifts; the tags after it undo the bump (and keep the pop).
       const body = texts
         .map((t, j) => {
-          const emphasised = j === i || (style.emphasizeKeywords && isKeywordWord(group.words[j]!.text))
-          return emphasised ? `{\\c${highlight}}${t}{\\c${normal}}` : t
+          if (j === emphasis[g]) {
+            const colour = j === i ? highlight : emphasisColour
+            if (!bump) return `{\\c${colour}}${t}{\\c${normal}}`
+            return `{\\c${colour}${sizeTags(style.emphasisScale, popNow)}}${t}{\\c${normal}${sizeTags(1, popNow)}}`
+          }
+          return j === i ? `{\\c${highlight}}${t}{\\c${normal}}` : t
         })
         .join(' ')
       eventLines.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,{\\an5\\pos(${x},${y})${popTag}}${body}`)

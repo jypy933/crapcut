@@ -23,8 +23,10 @@ export interface CaptionStyle {
   box: boolean
   /** The spoken word grows in briefly when a new line appears. */
   pop: boolean
-  /** Shouted words, numbers and ALL CAPS words get the highlight colour too. */
-  emphasizeKeywords: boolean
+  /** Colour of the one key word per line that gets a calm emphasis (see shared/captionEmphasis.ts); the text colour for none. */
+  emphasisColor: string
+  /** Size of that key word relative to the rest of the line; 1 for none. */
+  emphasisScale: number
 }
 
 export const CAPTION_STYLES: readonly CaptionStyle[] = [
@@ -39,7 +41,8 @@ export const CAPTION_STYLES: readonly CaptionStyle[] = [
     shadowScale: 1,
     box: false,
     pop: true,
-    emphasizeKeywords: false
+    emphasisColor: '#FFE680',
+    emphasisScale: 1.08
   },
   {
     id: 'bold',
@@ -52,7 +55,8 @@ export const CAPTION_STYLES: readonly CaptionStyle[] = [
     shadowScale: 1,
     box: false,
     pop: true,
-    emphasizeKeywords: true
+    emphasisColor: '#B8FFA6',
+    emphasisScale: 1.06
   },
   {
     id: 'boxed',
@@ -65,7 +69,8 @@ export const CAPTION_STYLES: readonly CaptionStyle[] = [
     shadowScale: 0,
     box: true,
     pop: false,
-    emphasizeKeywords: false
+    emphasisColor: '#FFE680',
+    emphasisScale: 1.06
   },
   {
     id: 'minimal',
@@ -78,7 +83,8 @@ export const CAPTION_STYLES: readonly CaptionStyle[] = [
     shadowScale: 0.5,
     box: false,
     pop: false,
-    emphasizeKeywords: false
+    emphasisColor: '#FFFFFF',
+    emphasisScale: 1.1
   }
 ]
 

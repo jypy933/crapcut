@@ -206,7 +206,7 @@ let clips: Clip[] = titles.map((title, i) => {
     suggested: { start, end: start + 28 + i * 3 },
     source: { start: start - 20, end: start + 48 + i * 3 },
     status: i === 0 ? 'accepted' : i === 3 ? 'rejected' : 'pending',
-    words: words(start + 1, 'okay okay watch this one guys no way he actually did that I cannot believe what just happened chat is going crazy right now this is insane'),
+    words: words(start + 1, 'okay okay watch this one guys no way he actually did that. I cannot believe what just happened! chat is going crazy right now this is insane.'),
     captions: { enabled: true, y: 0.72, uppercase: true, styleId: 'clean' },
     chatMessages: fakeChat(start - 20, start + 48 + i * 3),
     chatOverlay: i === 0,

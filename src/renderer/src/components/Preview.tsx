@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { captionAt, clipWords, displayText, groupWords, isKeywordWord } from '@shared/captions'
+import { pickEmphasis } from '@shared/captionEmphasis'
+import { captionAt, clipWords, displayText, groupWords } from '@shared/captions'
 import { captionY, placeCaptionY, resetCaptionY, withCaptionY } from '@shared/captionPlacement'
 import { captionStyle } from '@shared/captionStyles'
 import {
@@ -154,7 +155,10 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
   }, [clip.id, src])
 
   const groups = useMemo(() => groupWords(clipWords(clip.words, clip.start, clip.end)), [clip.words, clip.start, clip.end])
+  // The same key word per line the burn-in picks (shared/captionEmphasis.ts).
+  const emphasis = useMemo(() => pickEmphasis(groups), [groups])
   const now = captionAt(groups, time - clip.start)
+  const keyWord = now ? (emphasis[groups.indexOf(now.group)] ?? -1) : -1
   const style = useMemo(() => captionStyle(clip.captions.styleId), [clip.captions.styleId])
   // The caption's height comes from the same pure mapping the ASS export uses.
   const y = drag?.kind === 'caption' ? drag.y : captionY(clip.captions, format)
@@ -279,12 +283,13 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
           >
             {now.group.words.map((w, i) => {
               const active = i === now.active
-              const emphasised = active || (style.emphasizeKeywords && isKeywordWord(w.text))
+              const key = i === keyWord
+              const color = active ? style.highlightColor : key ? style.emphasisColor : undefined
               return (
                 <span
                   key={`${w.t0}-${i}`}
                   className={active && style.pop ? 'pop' : undefined}
-                  style={emphasised ? { color: style.highlightColor } : undefined}
+                  style={color || key ? { color, fontSize: key && style.emphasisScale !== 1 ? `${style.emphasisScale}em` : undefined } : undefined}
                 >
                   {displayText(w.text, clip.captions.uppercase)}
                   {i < now.group.words.length - 1 ? ' ' : ''}
