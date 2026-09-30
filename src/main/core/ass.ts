@@ -3,6 +3,7 @@
 
 import { assColor, assEscape, inlineColor } from '@shared/assText'
 import { clampCaptionY } from '@shared/captionPlacement'
+import { captionFontSize, captionOutline } from '@shared/captionSafeZone'
 import { pickEmphasis } from '@shared/captionEmphasis'
 import { displayText, groupWords } from '@shared/captions'
 import { CAPTION_STYLES, type CaptionStyle } from '@shared/captionStyles'
@@ -33,6 +34,8 @@ export interface AssStyle {
   emphasisColor: string
   /** And is this much bigger than the rest of the line (1 for no bump). */
   emphasisScale: number
+  /** Left and right margin in pixels, where the text wraps; 6% of the width when omitted. */
+  marginX?: number
 }
 
 export function defaultAssStyle(format: 'vertical' | 'horizontal', y: number, uppercase: boolean, preset: CaptionStyle = CAPTION_STYLES[0]!): AssStyle {
@@ -41,8 +44,8 @@ export function defaultAssStyle(format: 'vertical' | 'horizontal', y: number, up
     width: vertical ? 1080 : 1920,
     height: vertical ? 1920 : 1080,
     fontName: preset.fontName,
-    fontSize: vertical ? 88 : 72,
-    outline: (vertical ? 7 : 6) * preset.outlineScale,
+    fontSize: captionFontSize(format),
+    outline: captionOutline(format, preset),
     shadow: 3 * preset.shadowScale,
     y,
     uppercase,
@@ -120,7 +123,7 @@ export function buildAss(words: Word[], style: AssStyle, chat?: ChatOverlayAssIn
   }
   // The caption block is centred on this point; the preview places it with the same mapping.
   const { x, y } = toOutputPixels({ x: 0.5, y: clampCaptionY(style.y) }, { width: style.width, height: style.height })
-  const margin = Math.round(style.width * 0.06)
+  const margin = style.marginX ?? Math.round(style.width * 0.06)
   const borderStyle = style.box ? 3 : 1
 
   const styleLines = [`Style: Caption,${style.fontName},${style.fontSize},${primary},${primary},${outlineColour},${back},0,0,0,0,100,100,0,0,${borderStyle},${style.outline},${style.shadow},5,${margin},${margin},0,1`]

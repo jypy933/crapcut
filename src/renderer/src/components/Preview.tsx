@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, 
 import { pickEmphasis } from '@shared/captionEmphasis'
 import { captionAt, clipWords, displayText, groupWords } from '@shared/captions'
 import { captionY, placeCaptionY, resetCaptionY, withCaptionY } from '@shared/captionPlacement'
+import { captionFontSize, captionOutline, defaultMarginX, fitCaptionStyle, safeZone, type FitStyle } from '@shared/captionSafeZone'
 import { captionStyle } from '@shared/captionStyles'
 import {
   buildChatOverlay,
@@ -154,22 +155,36 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip.id, src])
 
-  const groups = useMemo(() => groupWords(clipWords(clip.words, clip.start, clip.end)), [clip.words, clip.start, clip.end])
+  const words = useMemo(() => clipWords(clip.words, clip.start, clip.end), [clip.words, clip.start, clip.end])
+  const groups = useMemo(() => groupWords(words), [words])
   // The same key word per line the burn-in picks (shared/captionEmphasis.ts).
   const emphasis = useMemo(() => pickEmphasis(groups), [groups])
   const now = captionAt(groups, time - clip.start)
   const keyWord = now ? (emphasis[groups.indexOf(now.group)] ?? -1) : -1
   const style = useMemo(() => captionStyle(clip.captions.styleId), [clip.captions.styleId])
-  // The caption's height comes from the same pure mapping the ASS export uses.
-  const y = drag?.kind === 'caption' ? drag.y : captionY(clip.captions, format)
-  const fontPx = size.h * (format === 'vertical' ? 88 / 1920 : 72 / 1080)
-  const strokePx = style.box ? 0 : size.h * (format === 'vertical' ? (7 * 2) / 1920 : (6 * 2) / 1080) * style.outlineScale
+  const out = OUTPUT_SIZE[format]
+  // The caption's height comes from the same pure mapping the ASS export uses,
+  // then the same safe-zone fit the export applies (higher or lower, wrapping
+  // earlier when a line is too wide), so what is shown is what is exported.
+  const placedY = drag?.kind === 'caption' ? drag.y : captionY(clip.captions, format)
+  const fit = useMemo(
+    (): FitStyle =>
+      fitCaptionStyle<FitStyle>(
+        words,
+        { width: out.width, height: out.height, fontSize: captionFontSize(format), outline: captionOutline(format, style), y: placedY, uppercase: clip.captions.uppercase, emphasisScale: style.emphasisScale },
+        safeZone(format)
+      ).style,
+    [words, out.width, out.height, format, style, placedY, clip.captions.uppercase]
+  )
+  const y = fit.y
+  const marginPct = ((fit.marginX ?? defaultMarginX(out.width)) / out.width) * 100
+  const fontPx = size.h * (captionFontSize(format) / out.height)
+  const strokePx = style.box ? 0 : size.h * ((captionOutline(format, style) * 2) / out.height)
 
   // Chat overlay: an approximation of the burned-in look, same placement logic.
   // A clip saved before the chat overlay existed has neither field yet (main
   // normalises on read, but this stays cheap insurance).
   const chatMessages = clip.chatMessages ?? []
-  const out = OUTPUT_SIZE[format]
   const chatOn = (clip.chatOverlay ?? false) && chatMessages.length > 0
   const captionYForChat = clip.captions.enabled ? y : null
   const chatPos = drag?.kind === 'chat' ? drag.pos : chatPosition(clip.chatPos, format)
@@ -272,6 +287,7 @@ export function Preview({ clip, src, layout, format, videoRef, onTime, onPlaying
             className={`cap${style.box ? ' boxed' : ''}${drag?.kind === 'caption' ? ' dragging' : ''}`}
             style={{
               top: `${y * 100}%`,
+              ...(style.box ? { maxWidth: `${100 - 2 * marginPct}%` } : { left: `${marginPct}%`, right: `${marginPct}%` }),
               fontSize: fontPx,
               fontFamily: style.cssFontFamily,
               color: style.textColor,

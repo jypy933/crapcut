@@ -14,6 +14,7 @@ import { moveFile } from '../util/fsx'
 import { logger } from '../util/log'
 import { ensureClipNormalized } from './clipNormalize'
 import { DEFAULT_LAYOUT, prepareClipForBestOf, renderClipToFile, type BestOfPrepared, type ClipRenderDeps } from './clipRender'
+import { verifyExport } from './exportChecks'
 import type { GpuLock } from './gpuLock'
 import { loadMeta } from './steps'
 
@@ -237,6 +238,8 @@ export class Exporter {
     const partial = join(work, 'out.mp4')
 
     await renderClipToFile(this.deps(), clip, item.format, work, partial, signal, onProgress)
+    // Size, bars, sound, watermark and caption checks; may swap in a blur-fill re-render, throws only for a really broken clip.
+    await verifyExport(this.deps(), clip, item.format, work, partial, signal)
 
     rmSync(final, { force: true })
     moveFile(partial, final)

@@ -17,6 +17,7 @@ main process
    │   ├─ steps.ts      metadata -> chat -> audio -> transcribe -> moments -> clips
    │   ├─ clipRender.ts renders one clip, or prepares it for the best-of; shared by exporter.ts and bestOf.ts
    │   ├─ exporter.ts   export lane: renders kept clips one at a time
+   │   ├─ exportChecks.ts measures each finished export and runs core/exportChecks.ts on it
    │   ├─ bestOf.ts     joins the kept clips into one 16:9 "best of" video, one encode
    │   └─ gpuLock.ts    one AI model on the GPU at a time
    ├─ tools/          pinned downloads, checksums, GPU detection, process runner
@@ -283,6 +284,23 @@ encode, at roughly 60-90 MB each, so one best-of holds up to 50 clips (about
 export queue (progress and ETA over the prep and the encode, cancel, resume
 after a restart from the prep cache, hardware-encoder fallback to libx264) and
 shares the exporter's encode lock.
+
+## Export checks
+
+Captions are fitted before encoding: `fitCaptionStyle` (`core/captionSafeZone.ts`)
+estimates the caption block from its text and style and, when it would leave
+the platform safe zone (research table 2.5), moves it up or down and, if a line
+is too wide, wraps it earlier (`AssStyle.marginX`). Until exports are made per
+platform the vertical zone is `DEFAULT_PLATFORM` (TikTok); 16:9 keeps a 5%
+title-safe margin. After the encode `pipeline/exportChecks.ts` measures the file
+with the pinned ffprobe/FFmpeg (size, streams, `volumedetect`, `cropdetect` on
+three spots) and `core/exportChecks.ts` judges it: 1080x1920 (1920x1080), no
+black bars, audible sound, nothing added to the picture or the end, captions in
+the zone. Every failure goes to the local log. A vertical cam or crop layout
+with bars is re-rendered once with the blurred fill and kept if that clears
+them; only a wrong size, or missing or silent sound that the source did not
+have, fails the export with one plain sentence. All limits are constants at the
+top of the two core files.
 
 ## Hardware
 

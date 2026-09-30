@@ -8,8 +8,9 @@ import { clipWords } from '@shared/captions'
 import { captionY } from '@shared/captionPlacement'
 import { captionStyle } from '@shared/captionStyles'
 import { buildChatOverlay, chatOverlayGeometry, chatPosition, DEFAULT_CHAT_OVERLAY_OPTIONS } from '@shared/chatOverlay'
-import type { Clip, ExportFormat, HardwareProfile, Layout } from '@shared/types'
-import { buildAss, defaultAssStyle, type ChatOverlayAssInput } from '../core/ass'
+import type { Clip, ExportFormat, HardwareProfile, Layout, Word } from '@shared/types'
+import { buildAss, defaultAssStyle, type AssStyle, type ChatOverlayAssInput } from '../core/ass'
+import { safeZone, fitCaptionStyle } from '@shared/captionSafeZone'
 import { clipFacts, decideStructureHeuristically } from '../core/clipFacts'
 import { outputDuration } from '../core/edl'
 import { remapWordsToEdl } from '../core/edlCaptions'
@@ -33,10 +34,13 @@ import type { Store } from '../store'
 import { runTool } from '../tools/process'
 import type { ToolRegistry } from '../tools/registry'
 import { isCancelled, UserError } from '../util/errors'
+import { logger } from '../util/log'
 import type { GpuLock } from './gpuLock'
 import { probeMedia, type MediaInfo } from './media'
 import { ensureSfxCache } from './sfxCache'
 import { cachedLoudness, prepareStems, stemCacheKey, type StemCache } from './stems'
+
+const log = logger('clip-render')
 
 export const DEFAULT_LAYOUT: Layout = { id: 'default-blur', name: 'Full frame', kind: 'blur_fill', cam: null, game: { x: 0, y: 0, w: 1, h: 1 } }
 
@@ -95,7 +99,15 @@ function initWorkDir(deps: ClipRenderDeps, workDir: string): void {
   copyFileSync(join(deps.paths.resources, 'fonts', 'Montserrat-Black.ttf'), join(workDir, 'fonts', 'Montserrat-Black.ttf'))
 }
 
-const layoutFor = (deps: ClipRenderDeps, clip: Clip): Layout => (clip.layoutId ? deps.store.layout(clip.layoutId) : null) ?? DEFAULT_LAYOUT
+export const layoutFor = (deps: ClipRenderDeps, clip: Clip): Layout => (clip.layoutId ? deps.store.layout(clip.layoutId) : null) ?? DEFAULT_LAYOUT
+
+/** The caption style for `format`, with its height (and wrap width) pushed inside the platform safe zone when the streamer's placement would spill out of it. */
+function captionAssStyle(clip: Clip, format: ExportFormat, words: Word[]): AssStyle {
+  const style = defaultAssStyle(format, captionY(clip.captions, format), clip.captions.uppercase, captionStyle(clip.captions.styleId))
+  const fit = fitCaptionStyle(words, style, safeZone(format))
+  if (fit.adjusted) log.info(`captions moved into the ${format} safe zone (y ${style.y.toFixed(3)} -> ${fit.style.y.toFixed(3)}, margin ${fit.style.marginX ?? 'default'})`)
+  return fit.style
+}
 
 /** Writes the clip's captions (and chat overlay) to `captions.ass` in `workDir`; null when it has neither. */
 function writeCaptionsAss(clip: Clip, format: ExportFormat, workDir: string, layout: Layout, cut: ClipCut): string | null {
@@ -103,16 +115,15 @@ function writeCaptionsAss(clip: Clip, format: ExportFormat, workDir: string, lay
   const chatOn = clip.chatOverlay && clip.chatMessages.length > 0
   if (!captionsOn && !chatOn) return null
   const words = captionsOn ? clipWords(clip.words, cut.start, cut.end) : []
-  const y = captionY(clip.captions, format)
-  const style = captionStyle(clip.captions.styleId)
+  const style = captionAssStyle(clip, format, words)
   let chat: ChatOverlayAssInput | undefined
   if (chatOn) {
     const source = { width: cut.media.width, height: cut.media.height }
-    const geometry = chatOverlayGeometry(format, layout, source, captionsOn ? y : null, DEFAULT_CHAT_OVERLAY_OPTIONS, chatPosition(clip.chatPos, format))
+    const geometry = chatOverlayGeometry(format, layout, source, captionsOn ? style.y : null, DEFAULT_CHAT_OVERLAY_OPTIONS, chatPosition(clip.chatPos, format))
     const lines = buildChatOverlay(clip.chatMessages, cut.start, cut.end, geometry)
     if (lines.length > 0) chat = { lines, font: { fontName: 'Segoe UI', fontSize: DEFAULT_CHAT_OVERLAY_OPTIONS.fontSize } }
   }
-  writeFileSync(join(workDir, 'captions.ass'), buildAss(words, defaultAssStyle(format, y, clip.captions.uppercase, style), chat))
+  writeFileSync(join(workDir, 'captions.ass'), buildAss(words, style, chat))
   return 'captions.ass'
 }
 
@@ -312,9 +323,7 @@ async function renderAutoEditToFile(
     // segments, then remapped onto the edited output timeline.
     const relativeWords = wordsIn(clip.words, start, end).map((w) => ({ t0: Math.max(0, w.t0 - start), t1: Math.min(end, w.t1) - start, text: w.text }))
     const remapped = remapWordsToEdl(relativeWords, edl)
-    const y = captionY(clip.captions, format)
-    const style = captionStyle(clip.captions.styleId)
-    writeFileSync(join(workDir, 'captions.ass'), buildAss(remapped, defaultAssStyle(format, y, clip.captions.uppercase, style)))
+    writeFileSync(join(workDir, 'captions.ass'), buildAss(remapped, captionAssStyle(clip, format, remapped)))
     captionsAssFile = 'captions.ass'
   }
 
