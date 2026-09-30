@@ -23,7 +23,8 @@
     "e2e": "vitest run --config vitest.e2e.config.ts",
     "dist": "electron-vite build && electron-builder --win --publish never",
     "dev:ui": "vite --config vite.ui.config.ts",
-    "test:ui": "vitest run --config vitest.ui.config.ts"
+    "test:ui": "vitest run --config vitest.ui.config.ts",
+    "check": "npm test && npm run typecheck && npm run build"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
