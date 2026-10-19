@@ -46,6 +46,6 @@
   "dependencies": {
     "electron-updater": "^6.8.9",
     "yauzl": "^3.4.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   }
 }
